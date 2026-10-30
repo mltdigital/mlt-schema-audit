@@ -4,6 +4,11 @@ All notable changes to MLT Schema Audit. Dates are UK dates. Versions follow sem
 
 ## Unreleased (0.1.0)
 
+### Stage 7: documents and release build
+
+- Staff guide, server cron hand-over note for the Guru Hosting servers, contract revision notes, README.
+- `bin/build-release.php`: release ZIP from git-tracked files matching an explicit allowlist (plugin code, assets and this changelog only), with checks for uncommitted changes, version agreement, client names and development switches; reproducible bytes and a SHA-256 checksum; fails if the ZIP holds anything outside the allowlist.
+
 ### Stage 6: tests and static analysis
 
 - 105 unit tests (`php tests/run-tests.php`, no WordPress needed): every acceptance case that is pure logic, threats F1 to F7, M1, M2, E1, E2, D1 and F6 at the discovery level, plus the 72 fixture cases.
