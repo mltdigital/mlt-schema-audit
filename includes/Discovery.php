@@ -91,61 +91,113 @@ class Discovery {
 	}
 
 	/**
-	 * Gather candidates from same-host sitemaps, with caps.
+	 * Gather candidates from same-host sitemaps, with caps, in one call.
 	 *
 	 * @param Fetcher   $fetcher Fetcher (same policy as page fetches).
 	 * @param UrlPolicy $policy  Policy.
 	 * @return array List of { url, source, post_id, exclude }.
 	 */
 	public static function from_sitemaps( Fetcher $fetcher, UrlPolicy $policy ) {
-		$base  = $policy->home_scheme() . '://' . $policy->home_host();
-		$queue = array( $base . '/wp-sitemap.xml', $base . '/sitemap_index.xml', $base . '/sitemap.xml' );
-		$seen  = array();
-		$out   = array();
-		$read  = 0;
-		$found = 0;
-		while ( ! empty( $queue ) && $read < self::MAX_SITEMAPS && $found < self::MAX_SITEMAP_URLS ) {
-			$url = array_shift( $queue );
-			if ( isset( $seen[ $url ] ) ) {
-				continue;
+		$state = self::sitemap_state( $policy );
+		while ( ! $state['done'] ) {
+			$state = self::sitemap_step( $fetcher, $policy, $state );
+		}
+		return $state['out'];
+	}
+
+	/**
+	 * Starting state for stepped sitemap discovery.
+	 *
+	 * @param UrlPolicy $policy Policy.
+	 * @return array { queue, seen, out, read, deferrals, fetched, deferred, done }
+	 */
+	public static function sitemap_state( UrlPolicy $policy ) {
+		$base = $policy->home_scheme() . '://' . $policy->home_host();
+		return array(
+			'queue'     => array( $base . '/wp-sitemap.xml', $base . '/sitemap_index.xml', $base . '/sitemap.xml' ),
+			'seen'      => array(),
+			'out'       => array(),
+			'read'      => 0,
+			'deferrals' => 0,
+			'fetched'   => 0,
+			'deferred'  => false,
+			'done'      => false,
+		);
+	}
+
+	/**
+	 * Read at most one sitemap, so a worker slice never holds more than one
+	 * sitemap request and a killed process loses at most that one (finding 4).
+	 * A fetch the deadline deferred stays at the front of the queue, up to
+	 * three times; after that the sitemap counts as read and failed.
+	 *
+	 * @param Fetcher   $fetcher  Fetcher.
+	 * @param UrlPolicy $policy   Policy.
+	 * @param array     $state    State from sitemap_state() or a previous step.
+	 * @param float     $deadline Unix time to finish by; 0 for none.
+	 * @return array New state.
+	 */
+	public static function sitemap_step( Fetcher $fetcher, UrlPolicy $policy, array $state, $deadline = 0.0 ) {
+		$state['deferred'] = false;
+		if ( empty( $state['queue'] ) || $state['read'] >= self::MAX_SITEMAPS || count( $state['out'] ) >= self::MAX_SITEMAP_URLS ) {
+			$state['done'] = true;
+			return $state;
+		}
+		$url = (string) $state['queue'][0];
+		if ( isset( $state['seen'][ $url ] ) ) {
+			array_shift( $state['queue'] );
+			return $state;
+		}
+		$result = $fetcher->fetch( $url, 'GET', false, $deadline );
+		if ( $result['attempts'] > 0 ) {
+			++$state['fetched'];
+		}
+		if ( 'deferred' === $result['outcome'] ) {
+			if ( $result['attempts'] > 0 ) {
+				++$state['deferrals'];
 			}
-			$seen[ $url ] = true;
-			$result       = $fetcher->fetch( $url );
-			++$read;
-			if ( 'ok' !== $result['outcome'] ) {
-				continue;
-			}
-			$parsed = self::parse_sitemap( $result['body'] );
-			foreach ( $parsed['sitemaps'] as $child ) {
-				if ( $policy->check_url( $child )['ok'] ) {
-					$queue[] = $child;
-				}
-			}
-			foreach ( $parsed['urls'] as $loc ) {
-				if ( count( $out ) >= self::MAX_SITEMAP_URLS ) {
-					break;
-				}
-				$out[] = array(
-					'url'     => $loc,
-					'source'  => 'sitemap',
-					'post_id' => 0,
-					'exclude' => '',
-				);
-			}
-			$found = count( $out );
-			if ( ! empty( $parsed['urls'] ) || ! empty( $parsed['sitemaps'] ) ) {
-				// Found a working index; do not also read the fallbacks.
-				$queue = array_values(
-					array_filter(
-						$queue,
-						static function ( $q ) use ( $base ) {
-							return ! in_array( $q, array( $base . '/sitemap_index.xml', $base . '/sitemap.xml' ), true );
-						}
-					)
-				);
+			if ( $state['deferrals'] < 3 ) {
+				$state['deferred'] = true;
+				return $state;
 			}
 		}
-		return $out;
+		array_shift( $state['queue'] );
+		$state['seen'][ $url ] = true;
+		$state['deferrals']    = 0;
+		++$state['read'];
+		if ( 'ok' !== $result['outcome'] ) {
+			return $state;
+		}
+		$base   = $policy->home_scheme() . '://' . $policy->home_host();
+		$parsed = self::parse_sitemap( $result['body'] );
+		foreach ( $parsed['sitemaps'] as $child ) {
+			if ( $policy->check_url( $child )['ok'] ) {
+				$state['queue'][] = $child;
+			}
+		}
+		foreach ( $parsed['urls'] as $loc ) {
+			if ( count( $state['out'] ) >= self::MAX_SITEMAP_URLS ) {
+				break;
+			}
+			$state['out'][] = array(
+				'url'     => $loc,
+				'source'  => 'sitemap',
+				'post_id' => 0,
+				'exclude' => '',
+			);
+		}
+		if ( ! empty( $parsed['urls'] ) || ! empty( $parsed['sitemaps'] ) ) {
+			// Found a working index; do not also read the fallbacks.
+			$state['queue'] = array_values(
+				array_filter(
+					$state['queue'],
+					static function ( $q ) use ( $base ) {
+						return ! in_array( $q, array( $base . '/sitemap_index.xml', $base . '/sitemap.xml' ), true );
+					}
+				)
+			);
+		}
+		return $state;
 	}
 
 	/**

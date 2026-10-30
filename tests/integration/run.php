@@ -614,6 +614,118 @@ itest(
 	}
 );
 
+/**
+ * Transport that times out every request, for the budget tests.
+ */
+function timing_out_client() {
+	return new class() implements MLT\SchemaAudit\Engine\HttpClient {
+		public $count = 0;
+		public function request( $url, $pinned_ip, array $args ) {
+			++$this->count;
+			return array( 'status' => 0, 'error_code' => 'timeout', 'error' => 'timed out', 'headers' => array(), 'body' => '', 'truncated' => false, 'pinned' => true );
+		}
+	};
+}
+
+itest(
+	'F4 review 2026-10-30: a page the budget cuts short stays pending, and three deferrals record budget_timeout',
+	static function () use ( $admin ) {
+		finish_active_runs();
+		reset_settings( array( 'timeout' => 15 ) );
+		$repo   = new Repository();
+		$id     = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		$client = timing_out_client();
+		icheck( $id > 0, 'Recheck started' );
+		for ( $i = 1; $i <= 3; $i++ ) {
+			( new Worker( $client, static function () {} ) )->process( $id, 5 );
+			$row = $repo->pending_urls( $id, 5 );
+			if ( $i < 3 ) {
+				icheck( 1 === count( $row ) && $i === (int) $row[0]['attempts'], 'Still pending after deferral ' . $i );
+			}
+		}
+		icheck( 3 === $client->count, 'One request per slice: ' . $client->count );
+		global $wpdb;
+		$url = $wpdb->get_row( $wpdb->prepare( 'SELECT coverage, coverage_reason FROM ' . Installer::table( 'run_urls' ) . ' WHERE run_id = %d', $id ), ARRAY_A );
+		icheck( 'timeout' === $url['coverage'] && 'budget_timeout' === $url['coverage_reason'], 'Recorded: ' . wp_json_encode( $url ) );
+		finish_active_runs();
+	}
+);
+
+itest(
+	'F4 review 2026-10-30: a file check the budget cuts short is retried in the next slice, then recorded as a timeout',
+	static function () use ( $admin ) {
+		finish_active_runs();
+		reset_settings( array( 'timeout' => 15 ) );
+		$repo  = new Repository();
+		$id    = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		$image = home_url( '/wp-content/uploads/f4-logo.png' );
+		$repo->update_run( $id, array( 'state' => 'running', 'phase' => 'resources', 'summary' => (string) wp_json_encode( array( 'resources' => array( $image => array() ) ) ) ) );
+		$client = timing_out_client();
+		for ( $i = 1; $i <= 2; $i++ ) {
+			( new Worker( $client, static function () {} ) )->process( $id, 5 );
+			$run = $repo->get_run( $id );
+			icheck( 'resources' === $run['phase'], 'Still checking files after deferral ' . $i );
+		}
+		( new Worker( $client, static function () {} ) )->process( $id, 5 );
+		$run     = $repo->get_run( $id );
+		$summary = Repository::decode( $run['summary'] );
+		icheck( 3 === $client->count, 'One request per slice, three in all: ' . $client->count );
+		icheck( 1 === (int) $summary['resource_index'] && 'resources' !== $run['phase'], 'Moved past the file on the third deferral' );
+		icheck( ! isset( $summary['resource_attempts'] ), 'Attempt counter cleared' );
+		finish_active_runs();
+	}
+);
+
+itest(
+	'F4 review 2026-10-30: a tick that dies part way still leaves a worker event queued, after the lock expires',
+	static function () use ( $admin ) {
+		finish_active_runs();
+		reset_settings( array( 'timeout' => 15 ) );
+		$id = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		Scheduler::clear_worker();
+		$die = static function () {
+			throw new RuntimeException( 'process killed' );
+		};
+		add_filter( 'pre_http_request', $die );
+		$before = time();
+		try {
+			Worker::tick( 5 );
+			icheck( false, 'The tick should have died' );
+		} catch ( RuntimeException $e ) {
+			icheck( 'process killed' === $e->getMessage(), 'Died in the request: ' . $e->getMessage() );
+		} finally {
+			remove_filter( 'pre_http_request', $die );
+		}
+		$next = wp_next_scheduled( 'mltsa_worker' );
+		icheck( $next && $next >= $before + 5 + Worker::CONTINUATION_GRACE && $next <= time() + 5 + Worker::CONTINUATION_GRACE, 'Continuation queued after the budget and lock: ' . ( $next - $before ) );
+		icheck( 5 + 120 < Worker::CONTINUATION_GRACE + 5, 'Fires after the run lock (budget + 120 s) has expired' );
+		icheck( wp_next_scheduled( 'mltsa_watchdog' ), 'Watchdog queued' );
+		finish_active_runs();
+		Scheduler::clear_worker();
+		Worker::tick( 5 );
+		icheck( ! wp_next_scheduled( 'mltsa_worker' ), 'An idle tick queues no worker event' );
+	}
+);
+
+itest(
+	'F4 review 2026-10-30: the hourly watchdog requeues a worker for an active run that has none',
+	static function () use ( $admin ) {
+		finish_active_runs();
+		reset_settings();
+		$id = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		Scheduler::clear_worker();
+		Scheduler::on_watchdog();
+		icheck( wp_next_scheduled( 'mltsa_worker' ), 'Worker requeued' );
+		global $wpdb;
+		$events = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Installer::table( 'events' ) . " WHERE event_type = 'worker_restarted' AND run_id = %d", $id ) );
+		icheck( 1 === $events, 'Restart logged against the run' );
+		Scheduler::on_watchdog();
+		icheck( 1 === (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Installer::table( 'events' ) . " WHERE event_type = 'worker_restarted' AND run_id = %d", $id ) ), 'Nothing done while a worker is queued' );
+		finish_active_runs();
+		Scheduler::clear_worker();
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }

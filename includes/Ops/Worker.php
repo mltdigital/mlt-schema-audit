@@ -44,6 +44,18 @@ class Worker {
 	const SLOW_MS = 3000;
 
 	/**
+	 * Option holding stepped sitemap discovery for the active run.
+	 */
+	const DISCOVERY_OPTION = 'mltsa_discovery_state';
+
+	/**
+	 * Seconds after a tick's budget before its pre-scheduled continuation
+	 * fires: longer than the run lock's grace, so a killed worker's lock has
+	 * expired by then.
+	 */
+	const CONTINUATION_GRACE = 150;
+
+	/**
 	 * Repository.
 	 *
 	 * @var Repository
@@ -102,17 +114,24 @@ class Worker {
 		if ( Settings::constant_disabled() ) {
 			return array( 'state' => 'disabled' );
 		}
+		Scheduler::ensure_watchdog();
 		Scheduler::catch_up();
 		$status = array( 'state' => 'idle' );
 		$repo   = new Repository();
 		$run    = $repo->active_run();
 		if ( $run ) {
+			// Queue the next tick before working, so a process killed part way
+			// through (PHP time limit, host kill) still has a continuation
+			// (finding 4). A normal finish below brings it forward.
+			Scheduler::continue_worker( (int) $budget + self::CONTINUATION_GRACE );
 			$worker = new self();
 			$status = $worker->process( (int) $run['id'], $budget );
 		}
 		Outbox::process();
 		if ( $repo->active_run() ) {
-			Scheduler::kick_worker( 30 );
+			Scheduler::continue_worker( 30 );
+		} elseif ( $run ) {
+			Scheduler::clear_worker();
 		}
 		return $status;
 	}
@@ -185,8 +204,7 @@ class Worker {
 	private function step( array $run, $deadline ) {
 		switch ( $run['phase'] ) {
 			case 'discover':
-				$this->discover( $run );
-				return true;
+				return $this->discover( $run, $deadline );
 			case 'fetch':
 				return $this->fetch_batch( $run, $deadline );
 			case 'site':
@@ -234,11 +252,14 @@ class Worker {
 	}
 
 	/**
-	 * Discover: freeze the URL list.
+	 * Discover: freeze the URL list. Sitemaps are read one per call, with
+	 * progress in an option, so no slice waits on more than one sitemap.
 	 *
-	 * @param array $run Run.
+	 * @param array $run      Run.
+	 * @param float $deadline Deadline.
+	 * @return bool Whether to keep going in this tick.
 	 */
-	private function discover( array $run ) {
+	private function discover( array $run, $deadline ) {
 		list( $policy, $fetcher ) = $this->engine();
 		$scope                    = Repository::decode( $run['scope'] );
 		if ( ! empty( $scope['urls'] ) ) {
@@ -252,11 +273,23 @@ class Worker {
 				);
 			}
 		} else {
-			$candidates = Discovery::from_wordpress( $this->settings );
+			$sitemap = array();
 			if ( ! empty( $this->settings['sitemap_discovery'] ) ) {
-				$candidates      = array_merge( $candidates, Discovery::from_sitemaps( $fetcher, $policy ) );
-				$this->requests += 1;
+				$state = get_option( self::DISCOVERY_OPTION );
+				if ( ! is_array( $state ) || ! isset( $state['run_id'] ) || (int) $state['run_id'] !== (int) $run['id'] ) {
+					$state = array_merge( Discovery::sitemap_state( $policy ), array( 'run_id' => (int) $run['id'] ) );
+				}
+				if ( ! $state['done'] ) {
+					$before          = (int) $state['fetched'];
+					$state           = Discovery::sitemap_step( $fetcher, $policy, $state, $deadline );
+					$this->requests += (int) $state['fetched'] - $before;
+					update_option( self::DISCOVERY_OPTION, $state, false );
+					$this->repo->update_run( (int) $run['id'], array( 'progress_utc' => Repository::now() ) );
+					return ! $state['deferred'];
+				}
+				$sitemap = $state['out'];
 			}
+			$candidates = array_merge( Discovery::from_wordpress( $this->settings ), $sitemap );
 		}
 		$frozen = Discovery::freeze( $candidates, $policy, (int) $this->settings['max_urls'] );
 		$seq    = 0;
@@ -288,6 +321,8 @@ class Worker {
 				'progress_utc'   => Repository::now(),
 			)
 		);
+		delete_option( self::DISCOVERY_OPTION );
+		return true;
 	}
 
 	/**
@@ -323,8 +358,22 @@ class Worker {
 			// Record the attempt before the request, so a request that kills
 			// the process is not repeated for ever.
 			$this->repo->update_run_url( (int) $row['id'], array( 'attempts' => $attempts ) );
-			$result = $fetcher->fetch( $row['url'] );
-			++$this->requests;
+			$result = $fetcher->fetch( $row['url'], 'GET', false, $deadline );
+			if ( $result['attempts'] > 0 ) {
+				++$this->requests;
+			}
+			if ( 'deferred' === $result['outcome'] ) {
+				if ( 0 === (int) $result['attempts'] ) {
+					// No request was made: the attempt does not count.
+					$this->repo->update_run_url( (int) $row['id'], array( 'attempts' => $attempts - 1 ) );
+					return false;
+				}
+				if ( $attempts < self::MAX_URL_ATTEMPTS ) {
+					// Leave the URL pending; the next slice starts with it.
+					return false;
+				}
+				$result = self::settle_deferral( $result );
+			}
 			$this->record_page( $run, $row, $result, $extractor, $policy );
 			$this->repo->update_run(
 				(int) $run['id'],
@@ -337,6 +386,24 @@ class Worker {
 			$this->pause( (int) $result['duration_ms'] );
 		}
 		return true;
+	}
+
+	/**
+	 * The outcome recorded for a URL or file deferred on its last attempt:
+	 * a timeout when the budget kept cutting the request short, otherwise an
+	 * error with reason budget_spent. Either way it counts as unread.
+	 *
+	 * @param array $result Fetch result with outcome deferred.
+	 * @return array
+	 */
+	private static function settle_deferral( array $result ) {
+		if ( 'budget_timeout' === $result['reason'] ) {
+			$result['outcome'] = 'timeout';
+		} else {
+			$result['outcome'] = 'error';
+			$result['reason']  = 'budget_spent';
+		}
+		return $result;
 	}
 
 	/**
@@ -543,12 +610,42 @@ class Worker {
 
 		$total = count( $urls );
 		while ( $index < $total && microtime( true ) < $deadline && ! $this->should_stop( $run ) ) {
-			$url    = $urls[ $index ];
-			$result = $fetcher->fetch( $url, 'HEAD', true );
-			++$this->requests;
-			if ( in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
-				$result = $fetcher->fetch( $url, 'GET', true );
-				++$this->requests;
+			$url = $urls[ $index ];
+			// Record the attempt before the request, as for pages, so a file
+			// that kills the process is not requested for ever.
+			$attempt = ( isset( $summary['resource_attempt_index'] ) && (int) $summary['resource_attempt_index'] === $index ) ? (int) $summary['resource_attempts'] + 1 : 1;
+			if ( $attempt > self::MAX_URL_ATTEMPTS ) {
+				$result = array(
+					'outcome'     => 'error',
+					'reason'      => 'worker_stopped',
+					'status'      => 0,
+					'duration_ms' => 0,
+				);
+			} else {
+				$summary['resource_attempt_index'] = $index;
+				$summary['resource_attempts']      = $attempt;
+				$summary['resource_index']         = $index;
+				$summary['resources_broken']       = $broken;
+				$this->repo->update_run( (int) $run['id'], array( 'summary' => (string) wp_json_encode( $summary ) ) );
+				$result = $fetcher->fetch( $url, 'HEAD', true, $deadline );
+				if ( $result['attempts'] > 0 ) {
+					++$this->requests;
+				}
+				if ( in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
+					$result = $fetcher->fetch( $url, 'GET', true, $deadline );
+					if ( $result['attempts'] > 0 ) {
+						++$this->requests;
+					}
+				}
+				if ( 'deferred' === $result['outcome'] ) {
+					if ( 0 === (int) $result['attempts'] ) {
+						$summary['resource_attempts'] = $attempt - 1;
+					}
+					if ( 0 === (int) $result['attempts'] || $attempt < self::MAX_URL_ATTEMPTS ) {
+						break;
+					}
+					$result = self::settle_deferral( $result );
+				}
 			}
 			$summary['resource_outcomes'][ $url ] = $result['outcome'];
 			if ( in_array( $result['outcome'], array( 'not_found', 'gone' ), true ) ) {
@@ -566,7 +663,7 @@ class Worker {
 		$summary['resources_broken'] = $broken;
 		$done                        = $index >= count( $urls );
 		if ( $done ) {
-			unset( $summary['resources'] );
+			unset( $summary['resources'], $summary['resource_attempt_index'], $summary['resource_attempts'] );
 		}
 		$this->repo->update_run(
 			(int) $run['id'],
@@ -795,6 +892,7 @@ class Worker {
 	 * @param array  $extra Extra summary fields.
 	 */
 	private function finish( array $run, $state, array $extra = array() ) {
+		delete_option( self::DISCOVERY_OPTION );
 		$summary = array_merge( Repository::decode( $run['summary'] ), $extra );
 		$this->repo->update_run(
 			(int) $run['id'],

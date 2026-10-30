@@ -27,7 +27,7 @@ class Installer {
 	/**
 	 * Every cron hook the plugin owns.
 	 */
-	const HOOKS = array( 'mltsa_monthly_start', 'mltsa_worker', 'mltsa_outbox', 'mltsa_retention' );
+	const HOOKS = array( 'mltsa_monthly_start', 'mltsa_worker', 'mltsa_outbox', 'mltsa_retention', 'mltsa_watchdog' );
 
 	/**
 	 * Table suffixes.
@@ -86,6 +86,7 @@ class Installer {
 		delete_option( 'mltsa_last_tick' );
 		delete_option( 'mltsa_health' );
 		delete_option( 'mltsa_mail_blocked' );
+		delete_option( 'mltsa_discovery_state' );
 
 		if ( $remove ) {
 			foreach ( self::TABLES as $table ) {

@@ -7,6 +7,7 @@
 
 // phpcs:disable
 
+use MLT\SchemaAudit\Discovery;
 use MLT\SchemaAudit\Engine\Fetcher;
 use MLT\SchemaAudit\Engine\UrlPolicy;
 
@@ -271,5 +272,78 @@ mltsa_test(
 		$result = mltsa_fetcher( $client )->fetch( $base . '/wp-content/uploads/old.png', 'HEAD', true );
 		check_same( 'blocked', $result['outcome'], 'redirect from an image to a script refused' );
 		check_same( 1, count( $client->requests ), 'no request made to the script' );
+	}
+);
+
+mltsa_test(
+	'F4 review 2026-10-30: a deadline caps each request timeout, and a request it cuts short is deferred, not a timeout',
+	static function () {
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/slow/'] = array( 'status' => 0, 'error_code' => 'timeout' );
+		$fetcher = mltsa_fetcher( $client );
+
+		$cut = $fetcher->fetch( 'https://www.example-legal.co.uk/slow/', 'GET', false, microtime( true ) + 6.5 );
+		check_same( 6, $client->requests[0]['args']['timeout'], 'timeout lowered to the time left' );
+		check_same( 'deferred', $cut['outcome'], 'cut short by the budget' );
+		check_same( 'budget_timeout', $cut['reason'], 'reason' );
+		check_same( 1, $cut['attempts'], 'one request made' );
+
+		$full = $fetcher->fetch( 'https://www.example-legal.co.uk/slow/', 'GET', false, microtime( true ) + 100 );
+		check_same( 15, $client->requests[1]['args']['timeout'], 'setting used when time allows' );
+		check_same( 'timeout', $full['outcome'], 'a real timeout stays a timeout' );
+
+		$none = $fetcher->fetch( 'https://www.example-legal.co.uk/slow/', 'GET', false, microtime( true ) + 1 );
+		check_same( 'deferred', $none['outcome'], 'no time left' );
+		check_same( 'budget_spent', $none['reason'], 'reason when no request is made' );
+		check_same( 0, $none['attempts'], 'no attempt counted' );
+		check_same( 2, count( $client->requests ), 'no request made without time left' );
+	}
+);
+
+mltsa_test(
+	'F4 review 2026-10-30: a retry that would run past the deadline is deferred instead of slept for',
+	static function () {
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/busy/'] = array( 'status' => 503 );
+		$sleeps  = array();
+		$fetcher = new Fetcher( mltsa_policy(), $client, array(), static function ( $s ) use ( &$sleeps ) { $sleeps[] = $s; } );
+		$result  = $fetcher->fetch( 'https://www.example-legal.co.uk/busy/', 'GET', false, microtime( true ) + 5.5 );
+		check_same( array( 2 ), $sleeps, 'first backoff fits, second does not' );
+		check_same( 2, $result['attempts'], 'two requests' );
+		check_same( 'deferred', $result['outcome'], 'deferred' );
+		check_same( 'budget_retry', $result['reason'], 'reason' );
+	}
+);
+
+mltsa_test(
+	'F4 review 2026-10-30: sitemap discovery reads one sitemap per step and gives up on one deferred three times',
+	static function () {
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/wp-sitemap.xml'] = array( 'body' => '<sitemapindex><sitemap><loc>https://www.example-legal.co.uk/wp-sitemap-posts-page-1.xml</loc></sitemap><sitemap><loc>https://www.example-legal.co.uk/wp-sitemap-posts-post-1.xml</loc></sitemap></sitemapindex>', 'headers' => array( 'content-type' => 'application/xml' ) );
+		$client->responses['https://www.example-legal.co.uk/wp-sitemap-posts-page-1.xml'] = array( 'status' => 0, 'error_code' => 'timeout' );
+		$client->responses['https://www.example-legal.co.uk/wp-sitemap-posts-post-1.xml'] = array( 'body' => '<urlset><url><loc>https://www.example-legal.co.uk/news/a/</loc></url></urlset>', 'headers' => array( 'content-type' => 'application/xml' ) );
+		$policy  = mltsa_policy();
+		$fetcher = mltsa_fetcher( $client, $policy );
+		$state   = Discovery::sitemap_state( $policy );
+
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 100 );
+		check_same( 1, count( $client->requests ), 'one request for the index' );
+		check_same( 2, count( $state['queue'] ), 'children queued, fallbacks dropped' );
+
+		for ( $i = 1; $i <= 3; $i++ ) {
+			$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 6 );
+			check_same( 1 + $i, count( $client->requests ), 'one request per step, step ' . $i );
+			check_same( $i < 3, $state['deferred'], 'deferred until the third time, step ' . $i );
+		}
+		check_same( 2, $state['read'], 'third deferral counts the sitemap as read' );
+		check_same( array( 'https://www.example-legal.co.uk/wp-sitemap-posts-post-1.xml' ), $state['queue'], 'moved on to the next sitemap' );
+
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 100 );
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 100 );
+		check( $state['done'], 'done once the queue is empty' );
+		check_same( array( 'https://www.example-legal.co.uk/news/a/' ), array_column( $state['out'], 'url' ), 'URLs from the readable sitemap' );
+
+		$client->requests = array();
+		check_same( array( 'https://www.example-legal.co.uk/news/a/' ), array_column( Discovery::from_sitemaps( $fetcher, $policy ), 'url' ), 'one-call discovery unchanged without a deadline' );
 	}
 );
