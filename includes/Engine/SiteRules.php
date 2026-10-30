@@ -68,6 +68,7 @@ class SiteRules {
 				'source'            => 'unknown',
 				'source_confidence' => 'low',
 				'site_wide'         => true,
+				'support'           => array(),
 			),
 			$data
 		);
@@ -130,6 +131,7 @@ class SiteRules {
 							'path'        => $entry['path'],
 							'observed'    => $other,
 							'comparison'  => 'Same telephone and postcode as ' . $main . ', with no link between them',
+							'support'     => array_keys( $ids[ $main ] + $ids[ $other ] ),
 						)
 					);
 				}
@@ -171,8 +173,12 @@ class SiteRules {
 						return count( $b ) - count( $a );
 					}
 				);
-				$keys   = array_keys( $values );
-				$common = (string) $keys[0];
+				$keys    = array_keys( $values );
+				$common  = (string) $keys[0];
+				$support = array();
+				foreach ( $values as $pages_with ) {
+					$support += $pages_with;
+				}
 				foreach ( array_slice( $keys, 1 ) as $value ) {
 					foreach ( $values[ $value ] as $url_id => $entry ) {
 						$out[ $url_id ][] = self::finding(
@@ -186,6 +192,7 @@ class SiteRules {
 								'path'        => $entry['path'],
 								'observed'    => (string) $value,
 								'comparison'  => sprintf( '%s on %d other page(s)', $common, count( $values[ $common ] ) ),
+								'support'     => array_keys( $support ),
 							)
 						);
 					}
@@ -311,6 +318,7 @@ class SiteRules {
 							'source'            => 'unknown',
 							'source_confidence' => 'low',
 							'site_wide'         => true,
+							'support'           => array_keys( $per_page ),
 						);
 					}
 				}
@@ -368,7 +376,67 @@ class SiteRules {
 			'source'            => 'unknown',
 			'source_confidence' => 'low',
 			'site_wide'         => true,
+			'support'           => array(),
 		);
+	}
+
+	/**
+	 * Evidence behind each site-wide issue in this run: the pages whose facts
+	 * the finding rests on (every page carrying the entity, not only the
+	 * page that differs) and, for URL-004, the resource itself. The issue
+	 * register clears a site-wide issue only when all of it is read again.
+	 *
+	 * @param array $pages run_url_id => site facts.
+	 * @param array $urls  run_url_id => URL.
+	 * @return array issue_key => sorted refs (page url_key, or resource:<url>)
+	 */
+	public static function evidence( array $pages, array $urls ) {
+		$refs = array();
+		$add  = static function ( $key, array $url_ids ) use ( &$refs, $urls ) {
+			foreach ( $url_ids as $url_id ) {
+				if ( isset( $urls[ $url_id ] ) ) {
+					$refs[ $key ][ Evaluator::url_key( $urls[ $url_id ] ) ] = true;
+				}
+			}
+		};
+		foreach ( self::evaluate( $pages ) as $url_id => $findings ) {
+			foreach ( $findings as $finding ) {
+				$add( Comparator::issue_key( '', $finding ), array_merge( array( $url_id ), $finding['support'] ) );
+			}
+		}
+		foreach ( self::resources( $pages ) as $url => $where_list ) {
+			foreach ( $where_list as $where ) {
+				$key                                = Comparator::issue_key( '', self::broken_resource( $url, $where, 404 ) );
+				$refs[ $key ][ 'resource:' . $url ] = true;
+				$add( $key, array( $where['url_id'] ) );
+			}
+		}
+		foreach ( $refs as $key => $set ) {
+			$list = array_keys( $set );
+			sort( $list );
+			$refs[ $key ] = $list;
+		}
+		return $refs;
+	}
+
+	/**
+	 * Every own-host resource referenced by a page read in this run, with
+	 * the outcome of its check. A resource referenced but not checked (over
+	 * the cap, or the check did not finish) is "unchecked", which holds any
+	 * issue that rests on it.
+	 *
+	 * @param array $pages    run_url_id => site facts (resources key used).
+	 * @param array $outcomes Resource URL => fetch outcome, from the check.
+	 * @return array url => outcome
+	 */
+	public static function resource_outcomes( array $pages, array $outcomes ) {
+		$out = array();
+		foreach ( $pages as $facts ) {
+			foreach ( isset( $facts['resources'] ) ? array_keys( (array) $facts['resources'] ) : array() as $url ) {
+				$out[ $url ] = isset( $outcomes[ $url ] ) ? (string) $outcomes[ $url ] : 'unchecked';
+			}
+		}
+		return $out;
 	}
 
 	/**

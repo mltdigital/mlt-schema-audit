@@ -568,7 +568,13 @@ class Repository {
 	 */
 	public function insert_issue( array $fields ) {
 		global $wpdb;
-		$fields = array_merge( array( 'exception_reason' => '' ), $fields );
+		$fields = array_merge(
+			array(
+				'exception_reason' => '',
+				'evidence'         => '',
+			),
+			$fields
+		);
 		$wpdb->insert( $this->t( 'issues' ), $fields );
 		return (int) $wpdb->insert_id;
 	}

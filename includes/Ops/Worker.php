@@ -473,6 +473,20 @@ class Worker {
 	}
 
 	/**
+	 * The evidence refs to store on a site-wide issue found in this run.
+	 *
+	 * @param array $occ      Occurrence (site_wide, issue_key).
+	 * @param array $evidence issue_key => refs, from SiteRules::evidence().
+	 * @return string JSON list, or '' for a page issue.
+	 */
+	private static function evidence_json( array $occ, array $evidence ) {
+		if ( ! (int) $occ['site_wide'] || empty( $evidence[ $occ['issue_key'] ] ) ) {
+			return '';
+		}
+		return (string) wp_json_encode( $evidence[ $occ['issue_key'] ] );
+	}
+
+	/**
 	 * Whether a run covers the full scope, so site-wide rules can run.
 	 *
 	 * @param array $run Run.
@@ -536,6 +550,7 @@ class Worker {
 				$result = $fetcher->fetch( $url );
 				++$this->requests;
 			}
+			$summary['resource_outcomes'][ $url ] = $result['outcome'];
 			if ( in_array( $result['outcome'], array( 'not_found', 'gone' ), true ) ) {
 				++$broken;
 				foreach ( $resources[ $url ] as $where ) {
@@ -586,10 +601,18 @@ class Worker {
 		foreach ( $coverage as $key => $info ) {
 			$pages[ $key ] = $info['coverage'];
 		}
+		$summary   = Repository::decode( $run['summary'] );
+		$evidence  = array();
+		$resources = array();
+		if ( self::full_scope( $run ) ) {
+			$facts     = $this->repo->page_facts( $run_id );
+			$evidence  = SiteRules::evidence( $facts, $this->repo->url_index( $run_id ) );
+			$resources = SiteRules::resource_outcomes( $facts, isset( $summary['resource_outcomes'] ) ? (array) $summary['resource_outcomes'] : array() );
+		}
 		$fingerprint = Repository::decode( $run['fingerprint'] );
 		$prior       = $baseline ? Repository::decode( $baseline['fingerprint'] ) : array();
 		$issues      = $this->repo->issues_by_key();
-		$result      = Comparator::reconcile( $issues, $findings, $pages, $fingerprint, $prior, self::full_scope( $run ) );
+		$result      = Comparator::reconcile( $issues, $findings, $pages, $fingerprint, $prior, self::full_scope( $run ), $resources );
 		$now         = Repository::now();
 		$is_baseline = empty( $prior );
 
@@ -614,6 +637,7 @@ class Worker {
 					'change_reason'        => $fields['change_reason'],
 					'observed_hash'        => $fields['observed_hash'],
 					'latest_occurrence_id' => (int) $occ['id'],
+					'evidence'             => self::evidence_json( $occ, $evidence ),
 					'work_status'          => 'open',
 					'updated_utc'          => $now,
 				)
@@ -631,6 +655,9 @@ class Worker {
 				$fields['last_observed_utc']    = $now;
 				$fields['latest_occurrence_id'] = (int) $current[ $key ]['id'];
 				$fields['severity']             = $current[ $key ]['severity'];
+				if ( $current[ $key ]['site_wide'] ) {
+					$fields['evidence'] = self::evidence_json( $current[ $key ], $evidence );
+				}
 				$this->repo->link_occurrences( $run_id, $key, (int) $issue['id'] );
 			}
 			if ( isset( $fields['verification_state'] ) ) {
@@ -658,14 +685,14 @@ class Worker {
 			}
 		}
 
-		$summary                = Repository::decode( $run['summary'] );
+		unset( $summary['resource_outcomes'] );
 		$summary['register']    = $result['summary'];
 		$summary['coverage']    = $this->repo->coverage_counts( $run_id );
 		$summary['severity']    = $this->repo->severity_counts( $run_id );
 		$summary['findings']    = count( $current );
 		$summary['is_baseline'] = $is_baseline;
 		if ( $baseline && self::full_scope( $run ) ) {
-			$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage );
+			$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage, $resources );
 		}
 		$this->repo->update_run(
 			$run_id,
@@ -683,11 +710,17 @@ class Worker {
 	 * @param array $baseline Baseline run.
 	 * @param int   $run_id   Run ID.
 	 * @param array $current  Current occurrences by key.
-	 * @param array $coverage Current coverage map.
+	 * @param array $coverage  Current coverage map.
+	 * @param array $resources Resource URL => check outcome for this run.
 	 * @return array
 	 */
-	private function comparison_counts( array $baseline, $run_id, array $current, array $coverage ) {
-		$shape  = static function ( array $occurrences, array $pages, $fingerprint ) {
+	private function comparison_counts( array $baseline, $run_id, array $current, array $coverage, array $resources ) {
+		$issues = $this->repo->issues_by_key();
+		$pages  = array();
+		foreach ( $coverage as $key => $info ) {
+			$pages[ $key ] = $info['coverage'];
+		}
+		$shape = static function ( array $occurrences, array $map, $fingerprint ) use ( $issues, $pages ) {
 			$findings = array();
 			foreach ( $occurrences as $key => $occ ) {
 				$findings[ $key ] = array(
@@ -695,18 +728,24 @@ class Worker {
 					'rule_id' => $occ['rule_id'],
 					'page'    => $occ['site_wide'] ? '' : Evaluator::url_key( $occ['page_url'] ),
 				);
+				if ( $occ['site_wide'] ) {
+					$findings[ $key ]['refs'] = isset( $issues[ $key ] ) ? Comparator::refs( $issues[ $key ], $pages ) : array();
+				}
 			}
 			return array(
 				'findings'    => $findings,
-				'pages'       => $pages,
+				'pages'       => $map,
 				'fingerprint' => $fingerprint,
 			);
 		};
+
 		$before = $shape( $this->repo->occurrences_by_key( (int) $baseline['id'] ), $this->repo->coverage_map( (int) $baseline['id'] ), Repository::decode( $baseline['fingerprint'] ) );
 		$run    = $this->repo->get_run( $run_id );
 		$after  = $shape( $current, $coverage, Repository::decode( $run['fingerprint'] ) );
 		$ever   = array();
-		foreach ( $this->repo->issues_by_key() as $key => $issue ) {
+
+		$after['resources'] = $resources;
+		foreach ( $issues as $key => $issue ) {
 			if ( (int) $issue['first_run_id'] < (int) $baseline['id'] ) {
 				$ever[ $key ] = true;
 			}

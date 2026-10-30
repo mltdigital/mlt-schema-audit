@@ -249,6 +249,7 @@ class Installer {
   change_reason varchar(20) NOT NULL DEFAULT '',
   observed_hash char(40) NOT NULL DEFAULT '',
   latest_occurrence_id bigint(20) unsigned NOT NULL DEFAULT 0,
+  evidence longtext NOT NULL,
   work_status varchar(30) NOT NULL DEFAULT 'open',
   owner_user_id bigint(20) unsigned NOT NULL DEFAULT 0,
   due_date date DEFAULT NULL,

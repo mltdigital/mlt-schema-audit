@@ -16,7 +16,7 @@ defined( 'ABSPATH' ) || exit;
 
 define( 'MLTSA_VERSION', '0.1.0' );
 define( 'MLTSA_ENGINE_VERSION', '1.0.0' );
-define( 'MLTSA_DB_VERSION', '1' );
+define( 'MLTSA_DB_VERSION', '2' );
 define( 'MLTSA_FILE', __FILE__ );
 define( 'MLTSA_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MLTSA_URL', plugin_dir_url( __FILE__ ) );

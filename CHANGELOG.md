@@ -10,8 +10,9 @@ Two code reviews on 30 October found defects to fix before any pilot. Fixed so f
 
 - Private-address check (review finding 1): IP addresses are now classified by their bytes, not their spelling. `::ffff:7f00:1`, `0:0:0:0:0:0:0:1`, NAT64 and 6to4 forms of loopback, private and metadata addresses were treated as public and are now refused.
 - Denied paths (review finding 11): the admin, login, XML-RPC and REST deny list is now checked against the path as a server would read it (decoded, dot segments and repeated slashes removed), so `/public/../wp-admin/`, `/%2e%2e/wp-admin/` and `//wp-admin/` are refused, including in absolute redirect locations. Frozen URLs have dot segments removed.
+- Site-wide issues (review finding 2): a site-wide issue (SITE-001, SITE-002, SITE-003, ID-003, URL-004) is now cleared only when every page it rests on was read again, or has gone, and, for a broken image or logo, the image was checked again or no page read still uses it. Before, any full-scope run with no matching finding cleared it, even when its pages timed out or had dropped out of scope. The evidence is stored on the issue in a new `evidence` column (database version 2). A page that could not be read, or an image over the 200-image cap, sets the issue to "Unavailable"; a page outside the run leaves it untouched. SITE-001 evidence includes every page carrying the business, not only the page that differs. Issues stored before this change clear only when every page in the run was read. The digest's "resolved" count follows the same rule.
 
-Still open: findings 2 to 10 of the first review and the confirmed items of the second (see `STATE.md` in the project folder).
+Still open: findings 3 to 10 of the first review and the confirmed items of the second (see `STATE.md` in the project folder).
 
 ### Stage 7: documents and release build
 

@@ -7,6 +7,8 @@
  * an excluded URL, a removed or changed rule or a reduced scope never sets
  * "no longer detected"; a removed or redirected page gets its own state; a
  * new or changed rule is labelled as a rule change, not a website change.
+ * A site-wide issue is cleared only when every page and resource it rested
+ * on was read again; a full-scope run alone is not enough.
  *
  * @package MLT\SchemaAudit
  */
@@ -79,9 +81,10 @@ class Comparator {
 	 * @param array  $fingerprint  rule_id => version for this run.
 	 * @param array  $prior_fingerprint rule_id => version of the previous comparable run, or empty.
 	 * @param bool   $full_scope   Whether this run covered the full scope (site-wide rules ran).
+	 * @param array  $resources    Resource URL => check outcome, for every resource a page read in this run references.
 	 * @return array { insert: issue_key => fields, update: issue_key => fields, events: list, summary }
 	 */
-	public static function reconcile( array $issues, array $findings, array $pages, array $fingerprint, array $prior_fingerprint, $full_scope ) {
+	public static function reconcile( array $issues, array $findings, array $pages, array $fingerprint, array $prior_fingerprint, $full_scope, array $resources = array() ) {
 		$out = array(
 			'insert'  => array(),
 			'update'  => array(),
@@ -157,6 +160,17 @@ class Comparator {
 				if ( ! $full_scope ) {
 					continue;
 				}
+				$evidence = self::evidence_state( self::refs( $issue, $pages ), $pages, $resources );
+				if ( 'unknown' === $evidence ) {
+					if ( 'unavailable' !== $issue['verification_state'] ) {
+						$out['update'][ $key ] = array( 'verification_state' => 'unavailable' );
+					}
+					++$out['summary']['unavailable'];
+					continue;
+				}
+				if ( 'missing' === $evidence ) {
+					continue; // Evidence outside this run's scope: untouched.
+				}
 				if ( ! $rule_same ) {
 					++$out['summary']['rule_change_held'];
 					continue;
@@ -192,13 +206,76 @@ class Comparator {
 	}
 
 	/**
+	 * The evidence refs stored for a site-wide issue. An issue stored before
+	 * evidence was recorded falls back to every page in this run's scope
+	 * (and its resource, for URL-004), so it clears only on full coverage.
+	 *
+	 * @param array $issue Issue row (evidence, entity_key).
+	 * @param array $pages url_key => coverage for this run.
+	 * @return array
+	 */
+	public static function refs( array $issue, array $pages ) {
+		$refs = isset( $issue['evidence'] ) ? json_decode( (string) $issue['evidence'], true ) : null;
+		if ( is_array( $refs ) && ! empty( $refs ) ) {
+			return array_values( array_map( 'strval', $refs ) );
+		}
+		$refs   = array_map( 'strval', array_keys( $pages ) );
+		$entity = isset( $issue['entity_key'] ) ? (string) $issue['entity_key'] : '';
+		if ( 0 === strpos( $entity, 'resource:' ) ) {
+			$refs[] = $entity;
+		}
+		return $refs;
+	}
+
+	/**
+	 * Whether the evidence behind a site-wide issue was read in this run.
+	 *
+	 * "read": every page was read or has conclusively gone, and every
+	 * resource was checked or is no longer referenced by any page read.
+	 * "unknown": a page or resource could not be read (timeout, error,
+	 * pending, over the resource cap). "missing": a page is outside this
+	 * run (excluded, or dropped from the scope), or there is no evidence.
+	 *
+	 * @param array $refs      Page url_keys and resource:<url> refs.
+	 * @param array $pages     url_key => coverage for this run.
+	 * @param array $resources Resource URL => check outcome, for every resource a page read in this run references.
+	 * @return string read|unknown|missing
+	 */
+	public static function evidence_state( array $refs, array $pages, array $resources ) {
+		$settled = array_merge( self::EVALUATED, self::REMOVED );
+		$read    = 0;
+		$held    = 0;
+		foreach ( $refs as $ref ) {
+			$ref = (string) $ref;
+			if ( 0 === strpos( $ref, 'resource:' ) ) {
+				$url = substr( $ref, strlen( 'resource:' ) );
+				if ( isset( $resources[ $url ] ) && ! in_array( $resources[ $url ], $settled, true ) ) {
+					return 'unknown';
+				}
+				continue; // Checked, or no page read in this run references it.
+			}
+			$coverage = isset( $pages[ $ref ] ) ? $pages[ $ref ] : '';
+			if ( in_array( $coverage, self::UNKNOWN, true ) ) {
+				return 'unknown';
+			}
+			if ( in_array( $coverage, $settled, true ) ) {
+				++$read;
+			} else {
+				++$held;
+			}
+		}
+		// Every finding rests on at least one page, so no page ref means no evidence.
+		return ( $read > 0 && 0 === $held ) ? 'read' : 'missing';
+	}
+
+	/**
 	 * Compare a run with its baseline for the change log and digest.
 	 *
 	 * Formatting-only changes (whitespace, key order) do not count, because
 	 * markup is compared by canonical hash.
 	 *
-	 * @param array $baseline { findings: key => observed_hash, pages: url_key => { coverage, markup } , fingerprint }.
-	 * @param array $current  Same shape.
+	 * @param array $baseline { findings: key => { hash, rule_id, page, refs (site-wide) }, pages: url_key => { coverage, markup } , fingerprint }.
+	 * @param array $current  Same shape, plus resources: resource URL => check outcome.
 	 * @param array $ever     Issue keys seen in any run before the baseline.
 	 * @return array
 	 */
@@ -236,14 +313,24 @@ class Comparator {
 				$result['unchanged'][] = $key;
 			}
 		}
+		$coverage  = array();
+		$resources = isset( $current['resources'] ) ? (array) $current['resources'] : array();
+		foreach ( $current['pages'] as $page => $info ) {
+			$coverage[ $page ] = $info['coverage'];
+		}
 		foreach ( $baseline['findings'] as $key => $item ) {
 			if ( isset( $current['findings'][ $key ] ) ) {
 				continue;
 			}
 			$page = isset( $item['page'] ) ? $item['page'] : '';
 			// Only a page read in both runs, under the same rule version, can
-			// show an issue as resolved.
-			$read = '' === $page || ( isset( $current['pages'][ $page ] ) && 'ok' === $current['pages'][ $page ]['coverage'] );
+			// show an issue as resolved; a site-wide issue needs all of its
+			// evidence read.
+			if ( '' === $page ) {
+				$read = 'read' === self::evidence_state( isset( $item['refs'] ) ? (array) $item['refs'] : array(), $coverage, $resources );
+			} else {
+				$read = isset( $current['pages'][ $page ] ) && 'ok' === $current['pages'][ $page ]['coverage'];
+			}
 			if ( $read && ! in_array( $item['rule_id'], $result['rules_changed'], true ) ) {
 				$result['resolved'][] = $key;
 			}

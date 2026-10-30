@@ -296,8 +296,8 @@ class UrlPolicy {
 		if ( 4 === strlen( $bin ) ) {
 			return self::classify_ipv4( $bin );
 		}
-		$zeros = str_repeat( "\0", 10 );
-		if ( $zeros . "\xff\xff" === substr( $bin, 0, 12 ) ) {
+		$mapped = str_repeat( "\0", 10 ) . "\xff\xff";
+		if ( substr( $bin, 0, 12 ) === $mapped ) {
 			return self::classify_ipv4( substr( $bin, 12 ) ); // ::ffff:0:0/96, IPv4-mapped.
 		}
 		if ( "\x00\x64\xff\x9b" . str_repeat( "\0", 8 ) === substr( $bin, 0, 12 ) ) {
