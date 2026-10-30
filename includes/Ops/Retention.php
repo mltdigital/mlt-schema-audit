@@ -14,7 +14,7 @@ namespace MLT\SchemaAudit\Ops;
 use MLT\SchemaAudit\Settings;
 use MLT\SchemaAudit\Store\Repository;
 
-defined( 'ABSPATH' ) || exit;
+defined( 'ABSPATH' ) || defined( 'MLTSA_TESTING' ) || exit;
 
 /**
  * Retention.

@@ -4,6 +4,12 @@ All notable changes to MLT Schema Audit. Dates are UK dates. Versions follow sem
 
 ## Unreleased (0.1.0)
 
+### Stage 5: monthly operations, verified
+
+- Proven on the disposable site by `tests/integration/run.php` (16 tests): monitoring cannot be switched on until scope, recipients and schedule are confirmed, then exactly one start is scheduled; deactivation leaves no `mltsa_` event; reactivation rebuilds the next start only; a missed month runs once as a catch-up with its lateness recorded; a second start for the same month, or any start while a run is in progress, is refused; the kill switch setting cancels a monthly run without another request while manual audits still start; `MLTSA_DISABLE` stops manual starts, the worker and mail; no recipients means no mail and never `admin_email`; a clone or staging copy pauses all mail until recipients are reconfirmed; an interrupted send becomes `delivery_unknown` and is never resent; failures retry at most three times; a recipient change rebuilds unsent notifications.
+- Added `Settings::reconfirm_recipients()`, logged with both addresses, for lifting the clone pause.
+- Deactivation now forgets when monitoring started, so a reactivation never catches up a month missed while the plugin was off.
+
 ### Stage 4: manual workflow
 
 - Admin screens under Schema Audit: Audits (start, live progress, run list), one audit (coverage, exclusions with reasons, comparison with the previous audit, pages), Findings (filters by audit, group, severity, outcome, status, rule and text; recheck of ticked findings), one finding (rule explanation, evidence as plain text, work status, owner, due date, external link, exception reason, reviewer and date, notes, history), Settings and Health.
