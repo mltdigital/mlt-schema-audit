@@ -100,7 +100,11 @@ class WpHttpClient implements HttpClient {
 		}
 
 		$headers = array();
-		foreach ( (array) wp_remote_retrieve_headers( $response ) as $name => $value ) {
+		$raw = wp_remote_retrieve_headers( $response );
+		// Casting the Requests header dictionary to an array yields its
+		// private storage, not the headers, so read it through getAll().
+		$raw = is_object( $raw ) && method_exists( $raw, 'getAll' ) ? $raw->getAll() : (array) $raw;
+		foreach ( $raw as $name => $value ) {
 			$headers[ strtolower( (string) $name ) ] = is_array( $value ) ? implode( ', ', $value ) : (string) $value;
 		}
 		$body = (string) wp_remote_retrieve_body( $response );

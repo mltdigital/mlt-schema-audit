@@ -60,8 +60,9 @@ class Installer {
 			wp_unschedule_hook( $hook );
 		}
 		delete_option( 'mltsa_lock_start' );
-		delete_transient( 'mltsa_worker_lock' );
-		delete_transient( 'mltsa_outbox_lock' );
+		// Forgetting when monitoring started means a reactivation schedules
+		// the next occurrence only and never catches up a missed one.
+		delete_option( 'mltsa_monitoring_since' );
 	}
 
 	/**
@@ -84,6 +85,7 @@ class Installer {
 		delete_option( 'mltsa_db_version' );
 		delete_option( 'mltsa_last_tick' );
 		delete_option( 'mltsa_health' );
+		delete_option( 'mltsa_mail_blocked' );
 
 		if ( $remove ) {
 			foreach ( self::TABLES as $table ) {
