@@ -116,16 +116,16 @@ class Views {
 	 * @param string $action Action.
 	 * @param string $label  Button label.
 	 * @param array  $hidden Hidden fields.
-	 * @param string $class  Button class.
+	 * @param string $button_class Button class.
 	 */
-	private static function button_form( $action, $label, array $hidden = array(), $class = 'button button-primary' ) {
+	private static function button_form( $action, $label, array $hidden = array(), $button_class = 'button button-primary' ) {
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="mltsa-inline">';
 		echo '<input type="hidden" name="action" value="' . esc_attr( $action ) . '">';
 		foreach ( $hidden as $name => $value ) {
 			echo '<input type="hidden" name="' . esc_attr( $name ) . '" value="' . esc_attr( $value ) . '">';
 		}
 		wp_nonce_field( $action );
-		echo '<button type="submit" class="' . esc_attr( $class ) . '">' . esc_html( $label ) . '</button></form>';
+		echo '<button type="submit" class="' . esc_attr( $button_class ) . '">' . esc_html( $label ) . '</button></form>';
 	}
 
 	/* ---------------------------------------------------------------- Audits */
@@ -213,14 +213,14 @@ class Views {
 		$summary = Repository::decode( $run['summary'] );
 		$scope   = Repository::decode( $run['scope'] );
 		$rows    = array(
-			'Type'             => $run['run_type'] . ( ! empty( $summary['is_baseline'] ) ? ', baseline' : '' ) . ( ! empty( $scope['catch_up'] ) ? ', catch-up' : '' ),
-			'State'            => Labels::of( Labels::RUN_STATES, $run['state'] ),
-			'Started'          => self::when( $run['started_utc'] ),
-			'Finished'         => self::when( $run['finished_utc'] ),
-			'Pages in scope'   => (int) $run['url_count'],
-			'Pages excluded'   => (int) $run['excluded_count'],
-			'Rule set'         => $run['ruleset_version'],
-			'Compared with'    => (int) $run['baseline_run_id'] ? 'Audit #' . (int) $run['baseline_run_id'] : 'Nothing (first audit)',
+			'Type'           => $run['run_type'] . ( ! empty( $summary['is_baseline'] ) ? ', baseline' : '' ) . ( ! empty( $scope['catch_up'] ) ? ', catch-up' : '' ),
+			'State'          => Labels::of( Labels::RUN_STATES, $run['state'] ),
+			'Started'        => self::when( $run['started_utc'] ),
+			'Finished'       => self::when( $run['finished_utc'] ),
+			'Pages in scope' => (int) $run['url_count'],
+			'Pages excluded' => (int) $run['excluded_count'],
+			'Rule set'       => $run['ruleset_version'],
+			'Compared with'  => (int) $run['baseline_run_id'] ? 'Audit #' . (int) $run['baseline_run_id'] : 'Nothing (first audit)',
 		);
 		if ( (int) $run['lateness_seconds'] > 300 ) {
 			$rows['Started late by'] = human_time_diff( 0, (int) $run['lateness_seconds'] );
@@ -291,7 +291,15 @@ class Views {
 		}
 		echo '</tbody></table>';
 		$counts = $repo->coverage_counts( $run_id );
-		self::pager( 'mltsa', $paged, '' !== $coverage ? ( isset( $counts[ $coverage ] ) ? $counts[ $coverage ] : 0 ) : array_sum( $counts ), array( 'run' => $run_id, 'coverage' => $coverage ) );
+		self::pager(
+			'mltsa',
+			$paged,
+			'' !== $coverage ? ( isset( $counts[ $coverage ] ) ? $counts[ $coverage ] : 0 ) : array_sum( $counts ),
+			array(
+				'run'      => $run_id,
+				'coverage' => $coverage,
+			)
+		);
 		self::close();
 	}
 
@@ -389,7 +397,16 @@ class Views {
 		echo '</select></label> ';
 		self::select( 'display', 'Group', array_merge( array( '' => 'All' ), Rules::DISPLAY ), $filter['display'] );
 		self::select( 'severity', 'Severity', array_merge( array( '' => 'All' ), Labels::SEVERITIES ), $filter['severity'] );
-		self::select( 'outcome', 'Outcome', array( '' => 'All', 'fail' => 'Fail', 'review' => 'Review' ), $filter['outcome'] );
+		self::select(
+			'outcome',
+			'Outcome',
+			array(
+				''       => 'All',
+				'fail'   => 'Fail',
+				'review' => 'Review',
+			),
+			$filter['outcome']
+		);
 		self::select( 'work_status', 'Status', array_merge( array( '' => 'All' ), Labels::WORK ), $filter['work_status'] );
 		$rule_options = array( '' => 'All' );
 		foreach ( Rules::catalogue() as $id => $rule ) {
@@ -438,7 +455,18 @@ class Views {
 		}
 		echo '</tbody></table>';
 		echo '<p><button class="button">' . esc_html__( 'Recheck the pages of the ticked findings', 'mlt-schema-audit' ) . '</button></p></form>';
-		self::pager( 'mltsa-findings', $paged, $total, array_merge( $filtered, array( 'run' => $run_id, 's' => $search ) ) );
+		self::pager(
+			'mltsa-findings',
+			$paged,
+			$total,
+			array_merge(
+				$filtered,
+				array(
+					'run' => $run_id,
+					's'   => $search,
+				)
+			)
+		);
 		self::close();
 	}
 
@@ -481,7 +509,7 @@ class Views {
 			echo '<p class="description">' . esc_html( sprintf( '%s. %s. Rule version %d, reviewed %s. Source: ', Rules::GROUPS[ $rule['group'] ], Rules::DISPLAY[ $rule['display'] ], (int) $issue['rule_version'], $rule['reviewed'] ) ) . '<a href="' . esc_url( $rule['source'] ) . '" rel="noopener noreferrer" target="_blank">' . esc_html( $rule['source'] ) . '</a></p>';
 		}
 		$occurrence = (int) $issue['latest_occurrence_id'] ? $repo->occurrence( (int) $issue['latest_occurrence_id'] ) : null;
-		$facts = array(
+		$facts      = array(
 			'Page'               => (int) $issue['site_wide'] ? '(site-wide)' : $issue['page_url'],
 			'Entity'             => $issue['entity_key'],
 			'Property'           => $issue['property'],
@@ -498,7 +526,12 @@ class Views {
 		echo '</tbody></table>';
 		if ( $occurrence ) {
 			echo '<h3>' . esc_html__( 'Evidence', 'mlt-schema-audit' ) . '</h3><table class="widefat mltsa-kv"><tbody>';
-			foreach ( array( 'Observed' => $occurrence['observed'], 'Compared with' => $occurrence['comparison'], 'Block and path' => ( (int) $occurrence['block_index'] >= 0 ? 'Block ' . ( (int) $occurrence['block_index'] + 1 ) . ', ' : '' ) . $occurrence['json_path'], 'Source' => $occurrence['source'] . ' (' . $occurrence['source_confidence'] . ' confidence)' ) as $label => $value ) {
+			foreach ( array(
+				'Observed'       => $occurrence['observed'],
+				'Compared with'  => $occurrence['comparison'],
+				'Block and path' => ( (int) $occurrence['block_index'] >= 0 ? 'Block ' . ( (int) $occurrence['block_index'] + 1 ) . ', ' : '' ) . $occurrence['json_path'],
+				'Source'         => $occurrence['source'] . ' (' . $occurrence['source_confidence'] . ' confidence)',
+			) as $label => $value ) {
 				echo '<tr><th>' . esc_html( $label ) . '</th><td class="mltsa-evidence">' . esc_html( (string) $value ) . '</td></tr>';
 			}
 			echo '</tbody></table>';

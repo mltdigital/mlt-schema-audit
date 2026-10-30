@@ -153,7 +153,7 @@ class Graph {
 			$types = self::types_of( $value );
 			$props = $value;
 			unset( $props['@graph'], $props['@context'] );
-			$node                  = array(
+			$node          = array(
 				'key'       => count( $this->nodes ),
 				'id'        => $id,
 				'types'     => $types,
@@ -163,7 +163,7 @@ class Graph {
 				'top_level' => $top_level,
 				'is_ref'    => '' !== $id && 1 === count( $props ),
 			);
-			$this->nodes[]         = $node;
+			$this->nodes[] = $node;
 			if ( '' !== $id ) {
 				$this->by_id[ $id ][] = $node['key'];
 			}

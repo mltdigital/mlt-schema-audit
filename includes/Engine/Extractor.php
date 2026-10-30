@@ -61,16 +61,16 @@ class Extractor {
 		$without_scripts = self::strip_non_visible( $html );
 
 		return array(
-			'blocks'    => $blocks,
-			'microdata' => (int) preg_match_all( '/<[a-z][^>]*\sitemscope(?:[\s=>\/])/i', $without_scripts ),
-			'rdfa'      => (int) preg_match_all( '/<[a-z][^>]*\s(?:typeof|vocab)\s*=/i', $without_scripts ),
-			'canonical' => self::find_canonical( $html ),
-			'robots'    => self::find_meta( $html, 'robots' ),
+			'blocks'           => $blocks,
+			'microdata'        => (int) preg_match_all( '/<[a-z][^>]*\sitemscope(?:[\s=>\/])/i', $without_scripts ),
+			'rdfa'             => (int) preg_match_all( '/<[a-z][^>]*\s(?:typeof|vocab)\s*=/i', $without_scripts ),
+			'canonical'        => self::find_canonical( $html ),
+			'robots'           => self::find_meta( $html, 'robots' ),
 			'meta_description' => self::find_meta( $html, 'description' ),
-			'title'     => self::find_title( $html ),
-			'text'      => self::visible_text( $without_scripts ),
-			'body_text' => self::visible_text( self::body_of( $without_scripts ) ),
-			'tel_links' => self::tel_links( $without_scripts ),
+			'title'            => self::find_title( $html ),
+			'text'             => self::visible_text( $without_scripts ),
+			'body_text'        => self::visible_text( self::body_of( $without_scripts ) ),
+			'tel_links'        => self::tel_links( $without_scripts ),
 		);
 	}
 
@@ -104,7 +104,7 @@ class Extractor {
 			if ( false === $close ) {
 				break;
 			}
-			$tags[] = array(
+			$tags[]    = array(
 				'attrs'   => substr( $html, $start + 7, $open_end - $start - 7 ),
 				'content' => substr( $html, $open_end + 1, $close - $open_end - 1 ),
 				'offset'  => $start,
@@ -331,10 +331,10 @@ class Extractor {
 		}
 		$before = strtolower( substr( $html, max( 0, $offset - 300 ), min( 300, $offset ) ) );
 		$hints  = array(
-			'yoast'     => 'yoast',
-			'rank math' => 'rank-math',
-			'aioseo'    => 'aioseo',
-			'elementor' => 'elementor',
+			'yoast'        => 'yoast',
+			'rank math'    => 'rank-math',
+			'aioseo'       => 'aioseo',
+			'elementor'    => 'elementor',
 			'propertyhive' => 'propertyhive',
 		);
 		foreach ( $hints as $needle => $source ) {
@@ -364,7 +364,7 @@ class Extractor {
 			$end  = false === $end ? strlen( $html ) : strpos( $html, '>', $end );
 			$pos  = false === $end ? strlen( $html ) : $end + 1;
 		}
-		$out .= substr( $html, $pos );
+		$out  .= substr( $html, $pos );
 		$clean = preg_replace( '#<!--.*?-->#s', ' ', $out );
 		$clean = null === $clean ? $out : $clean;
 		$strip = preg_replace( '#<(style|template|noscript|svg)\b[^>]*>.*?</\1\s*>#is', ' ', $clean );
@@ -415,7 +415,7 @@ class Extractor {
 		// the digits after the space; an unquoted one ends at whitespace.
 		if ( preg_match_all( '/href\s*=\s*(?:"\s*(?:tel|callto):([^"]*)"|\'\s*(?:tel|callto):([^\']*)\'|(?:tel|callto):([^\s>]+))/i', (string) $html, $m, PREG_SET_ORDER ) ) {
 			foreach ( $m as $match ) {
-				$raw = isset( $match[3] ) && '' !== $match[3] ? $match[3] : ( isset( $match[2] ) && '' !== $match[2] ? $match[2] : $match[1] );
+				$raw     = isset( $match[3] ) && '' !== $match[3] ? $match[3] : ( isset( $match[2] ) && '' !== $match[2] ? $match[2] : $match[1] );
 				$found[] = rawurldecode( html_entity_decode( $raw, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
 			}
 		}

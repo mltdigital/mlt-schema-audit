@@ -59,6 +59,7 @@ function reset_settings( array $overrides = array() ) {
 	update_option( Settings::OPTION, array_merge( Settings::defaults(), array( 'gap_seconds' => 0 ), $overrides ), false );
 	Settings::flush();
 	wp_cache_delete( Settings::OPTION, 'options' );
+	Scheduler::sync();
 }
 function cron_hooks() {
 	$out = array();
@@ -179,6 +180,28 @@ $saved = get_option( Settings::OPTION );
 finish_active_runs();
 reset_settings();
 $admin = (int) get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) )[0];
+
+if ( getenv( 'MLTSA_IT_FULL' ) ) {
+	itest(
+		'AC hard gate: a full audit of 500 or more URLs completes, one request at a time, with every page read',
+		static function () use ( $admin ) {
+			finish_active_runs();
+			$id = Scheduler::start_manual( $admin );
+			icheck( $id > 0, 'Started' );
+			$worker  = new Worker();
+			$started = microtime( true );
+			do {
+				$status = $worker->process( $id, 120 );
+			} while ( in_array( $status['state'], array( 'queued', 'running' ), true ) && microtime( true ) - $started < 900 );
+			$run = ( new Repository() )->get_run( $id );
+			icheck( 'complete' === $run['state'], 'Complete: ' . $run['state'] );
+			icheck( (int) $run['url_count'] >= 500, 'At least 500 URLs: ' . $run['url_count'] );
+			$coverage = Repository::decode( $run['summary'] )['coverage'];
+			icheck( (int) $coverage['ok'] === (int) $run['url_count'], 'Every page read: ' . wp_json_encode( $coverage ) );
+			echo '      ' . (int) $run['url_count'] . ' URLs in ' . round( microtime( true ) - $started ) . " s\n";
+		}
+	);
+}
 
 /* ---------------------------------------------------------------- Stage 5 */
 

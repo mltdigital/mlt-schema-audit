@@ -100,7 +100,7 @@ class WpHttpClient implements HttpClient {
 		}
 
 		$headers = array();
-		$raw = wp_remote_retrieve_headers( $response );
+		$raw     = wp_remote_retrieve_headers( $response );
 		// Casting the Requests header dictionary to an array yields its
 		// private storage, not the headers, so read it through getAll().
 		$raw = is_object( $raw ) && method_exists( $raw, 'getAll' ) ? $raw->getAll() : (array) $raw;

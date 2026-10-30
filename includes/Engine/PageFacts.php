@@ -321,10 +321,16 @@ class PageFacts {
 		if ( count( $tokens ) < 2 ) {
 			return array();
 		}
-		$pattern = '/(?<![\p{L}\p{N}])' . implode( '[\s,]+', array_map( static function ( $t ) {
-			return preg_quote( $t, '/' );
-		}, $tokens ) ) . '(?![\p{L}\p{N}])/iu';
-		$out = array();
+		$pattern = '/(?<![\p{L}\p{N}])' . implode(
+			'[\s,]+',
+			array_map(
+				static function ( $t ) {
+					return preg_quote( $t, '/' );
+				},
+				$tokens
+			)
+		) . '(?![\p{L}\p{N}])/iu';
+		$out     = array();
 		if ( preg_match_all( $pattern, $this->text, $m, PREG_OFFSET_CAPTURE ) ) {
 			foreach ( $m[0] as $match ) {
 				$after = substr( $this->text, $match[1] + strlen( $match[0] ), $window );
@@ -346,7 +352,7 @@ class PageFacts {
 	 * @return bool
 	 */
 	public function has_phrase( $phrase ) {
-		$norm = static function ( $s ) {
+		$norm   = static function ( $s ) {
 			$s = html_entity_decode( preg_replace( '#<[^>]*>#', ' ', (string) $s ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
 			$s = str_replace( array( "\xE2\x80\x99", "\xE2\x80\x98", "\xE2\x80\x9C", "\xE2\x80\x9D" ), array( "'", "'", '"', '"' ), $s );
 			return strtolower( trim( (string) preg_replace( '/[^\p{L}\p{N}]+/u', ' ', $s ) ) );
@@ -355,4 +361,3 @@ class PageFacts {
 		return '' !== $needle && false !== strpos( ' ' . $norm( $this->text ) . ' ', ' ' . $needle . ' ' );
 	}
 }
-

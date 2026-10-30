@@ -254,7 +254,7 @@ class Worker {
 		} else {
 			$candidates = Discovery::from_wordpress( $this->settings );
 			if ( ! empty( $this->settings['sitemap_discovery'] ) ) {
-				$candidates = array_merge( $candidates, Discovery::from_sitemaps( $fetcher, $policy ) );
+				$candidates      = array_merge( $candidates, Discovery::from_sitemaps( $fetcher, $policy ) );
 				$this->requests += 1;
 			}
 		}
@@ -373,13 +373,13 @@ class Worker {
 			$coverage = 'not_html';
 		}
 		$fields = array(
-			'final_url'      => substr( (string) $result['final_url'], 0, 2048 ),
-			'redirect_chain' => (string) wp_json_encode( $result['chain'] ),
-			'http_status'    => (int) $result['status'],
-			'fetched_utc'    => Repository::now(),
-			'duration_ms'    => (int) $result['duration_ms'],
-			'response_hash'  => (string) $result['response_hash'],
-			'coverage'       => $coverage,
+			'final_url'       => substr( (string) $result['final_url'], 0, 2048 ),
+			'redirect_chain'  => (string) wp_json_encode( $result['chain'] ),
+			'http_status'     => (int) $result['status'],
+			'fetched_utc'     => Repository::now(),
+			'duration_ms'     => (int) $result['duration_ms'],
+			'response_hash'   => (string) $result['response_hash'],
+			'coverage'        => $coverage,
 			'coverage_reason' => substr( $reason, 0, 100 ),
 		);
 		if ( 'ok' !== $coverage ) {
@@ -527,7 +527,8 @@ class Worker {
 		$page_urls         = $this->repo->url_index( (int) $run['id'] );
 		$broken            = isset( $summary['resources_broken'] ) ? (int) $summary['resources_broken'] : 0;
 
-		while ( $index < count( $urls ) && microtime( true ) < $deadline && ! $this->should_stop( $run ) ) {
+		$total = count( $urls );
+		while ( $index < $total && microtime( true ) < $deadline && ! $this->should_stop( $run ) ) {
 			$url    = $urls[ $index ];
 			$result = $fetcher->fetch( $url, 'HEAD' );
 			++$this->requests;
@@ -686,7 +687,7 @@ class Worker {
 	 * @return array
 	 */
 	private function comparison_counts( array $baseline, $run_id, array $current, array $coverage ) {
-		$shape = static function ( array $occurrences, array $pages, $fingerprint ) {
+		$shape  = static function ( array $occurrences, array $pages, $fingerprint ) {
 			$findings = array();
 			foreach ( $occurrences as $key => $occ ) {
 				$findings[ $key ] = array(

@@ -1,0 +1,23 @@
+{
+    "name": "mltdigital/mlt-schema-audit",
+    "description": "Read-only JSON-LD audit for WordPress. Development tools only; the plugin has no runtime dependencies.",
+    "type": "wordpress-plugin",
+    "license": "proprietary",
+    "require": {
+        "php": ">=7.4"
+    },
+    "require-dev": {
+        "wp-coding-standards/wpcs": "^3.3",
+        "phpcompatibility/phpcompatibility-wp": "^2.1.8",
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.2"
+    },
+    "config": {
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "scripts": {
+        "test": "php tests/run-tests.php",
+        "lint": "phpcs"
+    }
+}

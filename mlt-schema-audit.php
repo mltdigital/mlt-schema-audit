@@ -22,12 +22,12 @@ define( 'MLTSA_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MLTSA_URL', plugin_dir_url( __FILE__ ) );
 
 spl_autoload_register(
-	static function ( $class ) {
+	static function ( $class_name ) {
 		$prefix = 'MLT\\SchemaAudit\\';
-		if ( 0 !== strpos( $class, $prefix ) ) {
+		if ( 0 !== strpos( $class_name, $prefix ) ) {
 			return;
 		}
-		$relative = str_replace( '\\', '/', substr( $class, strlen( $prefix ) ) );
+		$relative = str_replace( '\\', '/', substr( $class_name, strlen( $prefix ) ) );
 		if ( preg_match( '#[^A-Za-z0-9/]#', $relative ) ) {
 			return;
 		}

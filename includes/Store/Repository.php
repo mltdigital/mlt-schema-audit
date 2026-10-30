@@ -71,18 +71,18 @@ class Repository {
 		global $wpdb;
 		$fields = array_merge(
 			array(
-				'run_type'       => 'manual',
-				'trigger_type'   => 'user',
-				'trigger_user'   => 0,
-				'schedule_key'   => null,
-				'scope'          => '{}',
-				'engine_version' => MLTSA_ENGINE_VERSION,
+				'run_type'        => 'manual',
+				'trigger_type'    => 'user',
+				'trigger_user'    => 0,
+				'schedule_key'    => null,
+				'scope'           => '{}',
+				'engine_version'  => MLTSA_ENGINE_VERSION,
 				'ruleset_version' => \MLT\SchemaAudit\Engine\Rules::RULESET_VERSION,
-				'fingerprint'    => wp_json_encode( \MLT\SchemaAudit\Engine\Rules::fingerprint() ),
-				'state'          => 'queued',
-				'phase'          => 'discover',
-				'created_utc'    => self::now(),
-				'summary'        => '{}',
+				'fingerprint'     => wp_json_encode( \MLT\SchemaAudit\Engine\Rules::fingerprint() ),
+				'state'           => 'queued',
+				'phase'           => 'discover',
+				'created_utc'     => self::now(),
+				'summary'         => '{}',
 			),
 			$fields
 		);
@@ -404,7 +404,7 @@ class Repository {
 		$out  = array();
 		foreach ( $rows as $row ) {
 			if ( ! isset( $out[ $row['issue_key'] ] ) ) {
-				$row['page_url']             = (string) $row['page_url'];
+				$row['page_url']          = (string) $row['page_url'];
 				$out[ $row['issue_key'] ] = $row;
 			}
 		}
@@ -464,7 +464,7 @@ class Repository {
 	public function findings( $run_id, array $filter = array(), $limit = 50, $offset = 0 ) {
 		global $wpdb;
 		list( $where, $args ) = $this->finding_where( $run_id, $filter );
-		$sql = "SELECT o.*, u.url AS page_url, u.title AS page_title, i.id AS issue_id, i.work_status, i.owner_user_id, i.due_date, i.first_observed_utc, i.last_observed_utc, i.verification_state, i.verification_run_id, i.external_link
+		$sql                  = "SELECT o.*, u.url AS page_url, u.title AS page_title, i.id AS issue_id, i.work_status, i.owner_user_id, i.due_date, i.first_observed_utc, i.last_observed_utc, i.verification_state, i.verification_run_id, i.external_link
 			FROM {$this->t( 'occurrences' )} o
 			LEFT JOIN {$this->t( 'run_urls' )} u ON u.id = o.run_url_id
 			LEFT JOIN {$this->t( 'issues' )} i ON i.issue_key = o.issue_key
@@ -487,7 +487,7 @@ class Repository {
 	public function count_findings( $run_id, array $filter = array() ) {
 		global $wpdb;
 		list( $where, $args ) = $this->finding_where( $run_id, $filter );
-		$sql = "SELECT COUNT(*) FROM {$this->t( 'occurrences' )} o
+		$sql                  = "SELECT COUNT(*) FROM {$this->t( 'occurrences' )} o
 			LEFT JOIN {$this->t( 'run_urls' )} u ON u.id = o.run_url_id
 			LEFT JOIN {$this->t( 'issues' )} i ON i.issue_key = o.issue_key
 			WHERE $where";

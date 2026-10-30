@@ -26,10 +26,10 @@ class Retention {
 	 *
 	 * @param array $runs      Finished runs, newest first: { id, run_type, state }.
 	 * @param int   $keep      Runs of each type kept.
-	 * @param array $protected Run IDs never purged.
+	 * @param array $keep_ids  Run IDs never purged.
 	 * @return array Run IDs.
 	 */
-	public static function select( array $runs, $keep, array $protected ) {
+	public static function select( array $runs, $keep, array $keep_ids ) {
 		$seen      = array();
 		$purge     = array();
 		$baselined = false;
@@ -45,7 +45,7 @@ class Retention {
 				$baselined = true;
 				continue;
 			}
-			if ( $seen[ $type ] <= (int) $keep || in_array( $id, $protected, true ) ) {
+			if ( $seen[ $type ] <= (int) $keep || in_array( $id, $keep_ids, true ) ) {
 				continue;
 			}
 			$purge[] = $id;

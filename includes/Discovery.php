@@ -63,7 +63,7 @@ class Discovery {
 					'post_type'        => $types,
 					'post_status'      => 'publish',
 					'fields'           => 'ids',
-					'posts_per_page'   => 200,
+					'posts_per_page'   => 200, // phpcs:ignore WordPress.WP.PostsPerPage.posts_per_page_posts_per_page -- IDs only, paged, so the list is built in a few queries.
 					'paged'            => $paged,
 					'orderby'          => 'ID',
 					'order'            => 'ASC',
@@ -85,7 +85,8 @@ class Discovery {
 				++$taken;
 			}
 			++$paged;
-		} while ( count( $ids ) === 200 && $taken < $limit );
+			$batch = count( $ids );
+		} while ( 200 === $batch && $taken < $limit );
 		return $out;
 	}
 
@@ -102,7 +103,8 @@ class Discovery {
 		$seen  = array();
 		$out   = array();
 		$read  = 0;
-		while ( ! empty( $queue ) && $read < self::MAX_SITEMAPS && count( $out ) < self::MAX_SITEMAP_URLS ) {
+		$found = 0;
+		while ( ! empty( $queue ) && $read < self::MAX_SITEMAPS && $found < self::MAX_SITEMAP_URLS ) {
 			$url = array_shift( $queue );
 			if ( isset( $seen[ $url ] ) ) {
 				continue;
@@ -130,6 +132,7 @@ class Discovery {
 					'exclude' => '',
 				);
 			}
+			$found = count( $out );
 			if ( ! empty( $parsed['urls'] ) || ! empty( $parsed['sitemaps'] ) ) {
 				// Found a working index; do not also read the fallbacks.
 				$queue = array_values(
@@ -153,8 +156,8 @@ class Discovery {
 	 * @return array { urls, sitemaps }
 	 */
 	public static function parse_sitemap( $xml ) {
-		$xml = (string) $xml;
-		$out = array(
+		$xml      = (string) $xml;
+		$out      = array(
 			'urls'     => array(),
 			'sitemaps' => array(),
 		);
@@ -195,7 +198,7 @@ class Discovery {
 			// action, nonce and REST queries. Other sources lose it (F6).
 			$from_wp = 'home' === $c['source'] || 0 === strpos( (string) $c['source'], 'post:' );
 			$url     = $from_wp ? (string) preg_replace( '/#.*$/s', '', trim( (string) $c['url'] ) ) : self::clean( (string) $c['url'] );
-			$key = Evaluator::url_key( $url );
+			$key     = Evaluator::url_key( $url );
 			if ( '' === $url || isset( $keys[ $key ] ) ) {
 				continue;
 			}

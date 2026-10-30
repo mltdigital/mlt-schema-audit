@@ -96,25 +96,25 @@ class Exporter {
 	public function manifest() {
 		$scope = Repository::decode( $this->run['scope'] );
 		return array(
-			'tool'             => 'MLT Schema Audit',
-			'plugin_version'   => MLTSA_VERSION,
-			'coverage'         => Labels::COVERAGE_STATEMENT,
-			'site'             => home_url( '/' ),
-			'run_id'           => (int) $this->run['id'],
-			'run_type'         => $this->run['run_type'],
-			'run_state'        => $this->run['state'],
-			'complete'         => 'complete' === $this->run['state'],
-			'created_utc'      => $this->run['created_utc'],
-			'started_utc'      => $this->run['started_utc'],
-			'finished_utc'     => $this->run['finished_utc'],
-			'engine_version'   => $this->run['engine_version'],
-			'ruleset_version'  => $this->run['ruleset_version'],
-			'baseline_run_id'  => (int) $this->run['baseline_run_id'],
-			'scope'            => $scope,
-			'exported_utc'     => Repository::now(),
-			'export'           => empty( $this->filter ) ? 'full' : 'filtered',
-			'filter'           => (object) $this->filter,
-			'files'            => array_map(
+			'tool'            => 'MLT Schema Audit',
+			'plugin_version'  => MLTSA_VERSION,
+			'coverage'        => Labels::COVERAGE_STATEMENT,
+			'site'            => home_url( '/' ),
+			'run_id'          => (int) $this->run['id'],
+			'run_type'        => $this->run['run_type'],
+			'run_state'       => $this->run['state'],
+			'complete'        => 'complete' === $this->run['state'],
+			'created_utc'     => $this->run['created_utc'],
+			'started_utc'     => $this->run['started_utc'],
+			'finished_utc'    => $this->run['finished_utc'],
+			'engine_version'  => $this->run['engine_version'],
+			'ruleset_version' => $this->run['ruleset_version'],
+			'baseline_run_id' => (int) $this->run['baseline_run_id'],
+			'scope'           => $scope,
+			'exported_utc'    => Repository::now(),
+			'export'          => empty( $this->filter ) ? 'full' : 'filtered',
+			'filter'          => (object) $this->filter,
+			'files'           => array_map(
 				static function ( $f ) {
 					return $f . '.csv';
 				},
@@ -149,8 +149,8 @@ class Exporter {
 	 * @return string
 	 */
 	private function summary() {
-		$summary  = Repository::decode( $this->run['summary'] );
-		$rows     = array(
+		$summary = Repository::decode( $this->run['summary'] );
+		$rows    = array(
 			array( 'Coverage', Labels::COVERAGE_STATEMENT ),
 			array( 'Site', home_url( '/' ) ),
 			array( 'Run ID', (int) $this->run['id'] ),
@@ -193,7 +193,8 @@ class Exporter {
 				$rows[] = array( $u['url'], $u['title'], $u['discovery_source'], (int) $u['post_id'], Labels::of( Labels::COVERAGE, $u['coverage'] ), $u['coverage_reason'], (int) $u['http_status'], $u['final_url'], $u['canonical'], $u['robots'], (int) $u['jsonld_count'], (int) $u['microdata'], (int) $u['rdfa'], $u['fetched_utc'], (int) $u['duration_ms'], $u['markup_hash'] );
 			}
 			$offset += 500;
-		} while ( count( $batch ) === 500 );
+			$more    = 500 === count( $batch );
+		} while ( $more );
 		return Csv::document( array( 'Page URL', 'Page title', 'Discovery source', 'Post ID', 'Coverage', 'Coverage reason', 'HTTP status', 'Final URL', 'Canonical', 'Robots', 'JSON-LD blocks', 'Microdata items', 'RDFa attributes', 'Fetched (UTC)', 'Response time (ms)', 'Markup hash' ), $rows );
 	}
 

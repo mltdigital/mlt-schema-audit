@@ -28,9 +28,9 @@ class Calendar {
 	 * @return int UTC timestamp.
 	 */
 	public static function occurrence( $year, $month, $ordinal, $weekday, $time, $timezone ) {
-		$tz   = new \DateTimeZone( $timezone );
-		$base = new \DateTimeImmutable( sprintf( '%04d-%02d-01 00:00:00', $year, $month ), $tz );
-		$day  = $base->modify( $ordinal . ' ' . $weekday . ' of this month' );
+		$tz            = new \DateTimeZone( $timezone );
+		$base          = new \DateTimeImmutable( sprintf( '%04d-%02d-01 00:00:00', $year, $month ), $tz );
+		$day           = $base->modify( $ordinal . ' ' . $weekday . ' of this month' );
 		list( $h, $m ) = array_map( 'intval', explode( ':', $time ) );
 		// setTime on a local date handles the clock change: a time that does
 		// not exist on that day moves forward, as PHP defines.
@@ -51,7 +51,10 @@ class Calendar {
 		$year   = (int) $cursor->format( 'Y' );
 		$month  = (int) $cursor->format( 'n' );
 		$out    = array();
-		for ( $i = 0; $i < 24 && count( $out ) < $count; $i++ ) {
+		for ( $i = 0; $i < 24; $i++ ) {
+			if ( count( $out ) >= $count ) {
+				break;
+			}
 			$ts = self::occurrence( $year, $month, $s['schedule_ordinal'], $s['schedule_weekday'], $s['schedule_time'], $s['schedule_timezone'] );
 			if ( $ts > $after ) {
 				$out[] = $ts;

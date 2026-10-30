@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<ruleset name="MLT Schema Audit">
+	<description>WordPress coding and security standards, PHP 7.4 and later.</description>
+	<file>mlt-schema-audit.php</file>
+	<file>uninstall.php</file>
+	<file>includes</file>
+	<arg name="extensions" value="php"/>
+	<arg name="cache" value=".phpcs-cache"/>
+	<arg value="sp"/>
+
+	<config name="testVersion" value="7.4-"/>
+	<config name="minimum_wp_version" value="5.8"/>
+
+	<rule ref="PHPCompatibilityWP"/>
+	<rule ref="WordPress-Extra"/>
+	<rule ref="WordPress.Security"/>
+	<rule ref="WordPress.DB"/>
+	<rule ref="WordPress.WP.Capabilities">
+		<properties>
+			<property name="custom_capabilities" type="array">
+				<element value="mltsa_audit"/>
+				<element value="mltsa_manage"/>
+			</property>
+		</properties>
+	</rule>
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array"><element value="mlt-schema-audit"/></property>
+		</properties>
+	</rule>
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="mltsa"/>
+				<element value="MLT\SchemaAudit"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!-- PSR-4 style class files (Plugin.php, Engine/Graph.php) instead of class-*.php. -->
+	<rule ref="WordPress.Files.FileName">
+		<exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
+		<exclude name="WordPress.Files.FileName.NotHyphenatedLowercase"/>
+	</rule>
+</ruleset>

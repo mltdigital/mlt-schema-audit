@@ -49,9 +49,9 @@ class Digest {
 			'alert'     => 'operational alert',
 			'no_change' => 'no changes',
 		);
-		$label = isset( $labels[ $type ] ) ? $labels[ $type ] : 'report';
-		$host  = preg_replace( '/[^a-z0-9.\-:]/i', '', (string) $host );
-		$date  = preg_replace( '/[^0-9\-]/', '', (string) $date );
+		$label  = isset( $labels[ $type ] ) ? $labels[ $type ] : 'report';
+		$host   = preg_replace( '/[^a-z0-9.\-:]/i', '', (string) $host );
+		$date   = preg_replace( '/[^0-9\-]/', '', (string) $date );
 		return self::header_safe( sprintf( 'Schema audit for %s, %s: %s', $host, $date, $label ) );
 	}
 

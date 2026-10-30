@@ -66,7 +66,7 @@ class Cli {
 	 * @param array $args       Positional.
 	 * @param array $assoc_args Named.
 	 */
-	public function status( $args, $assoc_args ) {
+	public function status( $args, $assoc_args ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- WP-CLI passes both arguments to every command.
 		$repo = new Store\Repository();
 		foreach ( $repo->runs( 5 ) as $run ) {
 			\WP_CLI::log( sprintf( '#%d %s %s %s %d/%d', $run['id'], $run['run_type'], $run['state'], $run['phase'], $run['done_count'], $run['url_count'] ) );

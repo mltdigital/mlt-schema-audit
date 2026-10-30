@@ -60,11 +60,11 @@ class Rules {
 	 * @return array
 	 */
 	public static function catalogue() {
-		$json_ld   = 'https://www.w3.org/TR/json-ld11/';
-		$schema    = 'https://schema.org/docs/datamodel.html';
-		$google    = 'https://developers.google.com/search/docs/appearance/structured-data/sd-policies';
-		$reviewed  = '2026-10-30';
-		$rules     = array(
+		$json_ld  = 'https://www.w3.org/TR/json-ld11/';
+		$schema   = 'https://schema.org/docs/datamodel.html';
+		$google   = 'https://developers.google.com/search/docs/appearance/structured-data/sd-policies';
+		$reviewed = '2026-10-30';
+		$rules    = array(
 			'SYN-001'  => array( 1, 'syntax', 'high', 'confirmed', 'JSON-LD block does not parse', 'Every application/ld+json block in the server response.', 'Block index and the parser\'s original error.', $json_ld, 'The block is not valid JSON, so search engines ignore all of it.', 'Open the page source, find the block by its position, and correct the JSON at the point the error names. Check which plugin or widget outputs it.' ),
 			'SYN-002'  => array( 1, 'syntax', 'high', 'confirmed', 'JSON-LD block is HTML entity encoded', 'Blocks that fail to parse but parse after entity decoding.', 'Original error and the decoded form.', $json_ld, 'Script content is read literally, so &quot; is not a quote mark. The block is invalid as published even though it looks right in an editor.', 'Find the widget or field that escapes the markup (often a page builder HTML widget) and output the JSON unescaped.' ),
 			'SYN-003'  => array( 1, 'syntax', 'medium', 'conflict', 'Block too large or too deeply nested to analyse', 'Blocks over the size, depth or node limits.', 'Block size or depth reached.', $json_ld, 'The audit stopped analysing this block at a safety limit, so its findings are incomplete. This is not proof the markup is wrong.', 'Check whether the block is generated in a loop or duplicates content.' ),
@@ -118,7 +118,7 @@ class Rules {
 			'SITE-002' => array( 1, 'consistency', 'medium', 'conflict', 'Same business under different @ids on different pages', 'Businesses with the same telephone and postcode across pages.', 'Both identifiers.', $json_ld, 'One business described under several unlinked identifiers across the site is fragmented.', 'Use one @id for the business on every page, or link the identifiers.' ),
 			'SITE-003' => array( 1, 'consistency', 'low', 'conflict', 'WebSite or WebPage @id inconsistent across pages', 'WebSite and WebPage entities with an @id.', 'The differing values and their pages.', $json_ld, 'A site-wide @id should mean the same thing everywhere. Different names, or one WebPage @id on several URLs, make consumers merge different pages.', 'Give each page its own WebPage @id (usually its URL) and the site one name.' ),
 		);
-		$out = array();
+		$out      = array();
 		foreach ( $rules as $id => $r ) {
 			$out[ $id ] = array(
 				'id'          => $id,

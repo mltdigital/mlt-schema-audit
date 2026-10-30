@@ -256,14 +256,14 @@ class UrlPolicy {
 	 * Whether an address class is allowed for a host.
 	 *
 	 * @param string $host  Host.
-	 * @param string $class Address class from classify_ip().
+	 * @param string $address_class Address class from classify_ip().
 	 * @return bool
 	 */
-	private function address_allowed( $host, $class ) {
-		if ( 'public' === $class ) {
+	private function address_allowed( $host, $address_class ) {
+		if ( 'public' === $address_class ) {
 			return true;
 		}
-		if ( $this->allow_private_self && $this->is_own_host( $host ) && ( 'loopback' === $class || 'private' === $class ) ) {
+		if ( $this->allow_private_self && $this->is_own_host( $host ) && ( 'loopback' === $address_class || 'private' === $address_class ) ) {
 			return true;
 		}
 		return false;
@@ -321,7 +321,7 @@ class UrlPolicy {
 		if ( false === $bin ) {
 			return 'invalid';
 		}
-		$first = ord( $bin[0] );
+		$first  = ord( $bin[0] );
 		$second = ord( $bin[1] );
 		if ( 0xfe === $first && 0x80 === ( $second & 0xc0 ) ) {
 			return 'link_local';

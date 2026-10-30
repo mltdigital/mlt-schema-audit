@@ -125,7 +125,15 @@ class Evaluator {
 			$parsed += 'ok' === $block['parse'] ? 1 : 0;
 		}
 		if ( empty( $this->blocks ) ) {
-			$this->add( 'REL-001', 'review', 'high', array( 'observed' => '0 JSON-LD blocks', 'comparison' => sprintf( 'Microdata: %d, RDFa: %d', (int) $extraction['microdata'], (int) $extraction['rdfa'] ) ) );
+			$this->add(
+				'REL-001',
+				'review',
+				'high',
+				array(
+					'observed'   => '0 JSON-LD blocks',
+					'comparison' => sprintf( 'Microdata: %d, RDFa: %d', (int) $extraction['microdata'], (int) $extraction['rdfa'] ),
+				)
+			);
 		}
 		if ( (int) $extraction['microdata'] > 0 || (int) $extraction['rdfa'] > 0 ) {
 			$this->add( 'REL-002', 'review', 'high', array( 'observed' => sprintf( 'Microdata items: %d, RDFa attributes: %d', (int) $extraction['microdata'], (int) $extraction['rdfa'] ) ) );
@@ -160,11 +168,27 @@ class Evaluator {
 			}
 			if ( 'error' === $block['parse'] ) {
 				if ( $block['entity_encoded'] ) {
-					$this->add( 'SYN-002', 'fail', 'high', $base + array( 'observed' => $block['error'], 'snippet' => $block['raw'] ) );
+					$this->add(
+						'SYN-002',
+						'fail',
+						'high',
+						$base + array(
+							'observed' => $block['error'],
+							'snippet'  => $block['raw'],
+						)
+					);
 				} elseif ( 0 === strpos( $block['error'], 'Nesting deeper' ) ) {
 					$this->add( 'SYN-003', 'review', 'high', $base + array( 'observed' => $block['error'] ) );
 				} else {
-					$this->add( 'SYN-001', 'fail', 'high', $base + array( 'observed' => $block['error'], 'snippet' => $block['raw'] ) );
+					$this->add(
+						'SYN-001',
+						'fail',
+						'high',
+						$base + array(
+							'observed' => $block['error'],
+							'snippet'  => $block['raw'],
+						)
+					);
 				}
 				continue;
 			}
@@ -239,7 +263,10 @@ class Evaluator {
 			$merged  = $this->merged_props( $node );
 			$hosts   = array();
 			$foreign = array();
-			foreach ( array( '@id' => $node['id'], 'url' => isset( $merged['url'] ) && is_string( $merged['url'] ) ? $merged['url'] : '' ) as $label => $value ) {
+			foreach ( array(
+				'@id' => $node['id'],
+				'url' => isset( $merged['url'] ) && is_string( $merged['url'] ) ? $merged['url'] : '',
+			) as $label => $value ) {
 				$host = $value ? strtolower( (string) parse_url( $value, PHP_URL_HOST ) ) : ''; // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
 				if ( '' === $host ) {
 					continue;
@@ -348,7 +375,15 @@ class Evaluator {
 					}
 					$postcode = $address['postalCode'];
 					if ( '' !== PageFacts::postcode_compact( $postcode ) && ! $this->facts->has_postcode( $postcode ) ) {
-						$this->add( 'FACT-002', 'review', 'medium', $this->node_base( $node, "['address']['postalCode']" ) + array( 'property' => 'postalCode', 'observed' => $postcode ) );
+						$this->add(
+							'FACT-002',
+							'review',
+							'medium',
+							$this->node_base( $node, "['address']['postalCode']" ) + array(
+								'property' => 'postalCode',
+								'observed' => $postcode,
+							)
+						);
 					}
 				}
 			}
@@ -365,7 +400,16 @@ class Evaluator {
 				continue;
 			}
 			if ( ! $this->facts->has_name( $merged['name'] ) ) {
-				$this->add( 'FACT-003', 'review', 'medium', $this->node_base( $node, "['name']" ) + array( 'property' => 'name', 'observed' => $merged['name'], 'comparison' => 'Page title: ' . $this->facts->title ) );
+				$this->add(
+					'FACT-003',
+					'review',
+					'medium',
+					$this->node_base( $node, "['name']" ) + array(
+						'property'   => 'name',
+						'observed'   => $merged['name'],
+						'comparison' => 'Page title: ' . $this->facts->title,
+					)
+				);
 			}
 		}
 
@@ -380,7 +424,16 @@ class Evaluator {
 				}
 				foreach ( $this->graph->resolve( $node['props'][ $prop ] ) as $person ) {
 					if ( Vocabulary::is_a( $person['types'], 'Person' ) && isset( $person['props']['name'] ) && is_string( $person['props']['name'] ) && ! $this->facts->has_name( $person['props']['name'] ) ) {
-						$this->add( 'FACT-005', 'review', 'medium', $this->node_base( $person, "['name']" ) + array( 'property' => 'name', 'observed' => $person['props']['name'], 'comparison' => 'Page title: ' . $this->facts->title ) );
+						$this->add(
+							'FACT-005',
+							'review',
+							'medium',
+							$this->node_base( $person, "['name']" ) + array(
+								'property'   => 'name',
+								'observed'   => $person['props']['name'],
+								'comparison' => 'Page title: ' . $this->facts->title,
+							)
+						);
 					}
 				}
 			}
@@ -451,7 +504,16 @@ class Evaluator {
 					continue;
 				}
 				if ( self::url_key( $url ) !== $canonical_norm ) {
-					$this->add( 'URL-003', 'review', 'high', $this->node_base( $node, "['url']" ) + array( 'property' => 'url', 'observed' => $url, 'comparison' => $canonical ) );
+					$this->add(
+						'URL-003',
+						'review',
+						'high',
+						$this->node_base( $node, "['url']" ) + array(
+							'property'   => 'url',
+							'observed'   => $url,
+							'comparison' => $canonical,
+						)
+					);
 				}
 			}
 		}
@@ -466,7 +528,15 @@ class Evaluator {
 			$merged = $this->merged_props( $node );
 			foreach ( array( 'aggregateRating', 'review' ) as $prop ) {
 				if ( ! empty( $merged[ $prop ] ) ) {
-					$this->add( 'FEAT-001', 'review', 'high', $this->node_base( $node, "['" . $prop . "']" ) + array( 'property' => $prop, 'observed' => self::scalar( $merged[ $prop ] ) ) );
+					$this->add(
+						'FEAT-001',
+						'review',
+						'high',
+						$this->node_base( $node, "['" . $prop . "']" ) + array(
+							'property' => $prop,
+							'observed' => self::scalar( $merged[ $prop ] ),
+						)
+					);
 				}
 			}
 		}
@@ -485,24 +555,64 @@ class Evaluator {
 					}
 				}
 				if ( empty( $questions ) ) {
-					$this->add( 'FEAT-002', 'fail', 'high', $this->node_base( $node, "['mainEntity']" ) + array( 'property' => 'mainEntity', 'observed' => isset( $node['props']['mainEntity'] ) ? self::scalar( $node['props']['mainEntity'] ) : '(absent)' ) );
+					$this->add(
+						'FEAT-002',
+						'fail',
+						'high',
+						$this->node_base( $node, "['mainEntity']" ) + array(
+							'property' => 'mainEntity',
+							'observed' => isset( $node['props']['mainEntity'] ) ? self::scalar( $node['props']['mainEntity'] ) : '(absent)',
+						)
+					);
 				}
 				foreach ( array_slice( $questions, 0, 50 ) as $q ) {
 					$name = isset( $q['props']['name'] ) && is_string( $q['props']['name'] ) ? $q['props']['name'] : '';
 					if ( '' !== $name && ! $this->facts->has_phrase( $name ) ) {
-						$this->add( 'FEAT-003', 'review', 'medium', $this->node_base( $q, "['name']" ) + array( 'property' => 'name', 'observed' => $name ) );
+						$this->add(
+							'FEAT-003',
+							'review',
+							'medium',
+							$this->node_base( $q, "['name']" ) + array(
+								'property' => 'name',
+								'observed' => $name,
+							)
+						);
 					}
 				}
 			}
 			if ( Vocabulary::is_a( $types, 'AggregateRating' ) ) {
 				$value = isset( $node['props']['ratingValue'] ) ? $node['props']['ratingValue'] : null;
 				if ( null === $value || '' === $value ) {
-					$this->add( 'FEAT-004', 'fail', 'high', $this->node_base( $node, "['ratingValue']" ) + array( 'property' => 'ratingValue', 'observed' => '(absent)' ) );
+					$this->add(
+						'FEAT-004',
+						'fail',
+						'high',
+						$this->node_base( $node, "['ratingValue']" ) + array(
+							'property' => 'ratingValue',
+							'observed' => '(absent)',
+						)
+					);
 				} elseif ( ! is_numeric( is_string( $value ) ? trim( $value ) : $value ) ) {
-					$this->add( 'FEAT-004', 'review', 'high', $this->node_base( $node, "['ratingValue']" ) + array( 'property' => 'ratingValue', 'observed' => self::scalar( $value ) ) );
+					$this->add(
+						'FEAT-004',
+						'review',
+						'high',
+						$this->node_base( $node, "['ratingValue']" ) + array(
+							'property' => 'ratingValue',
+							'observed' => self::scalar( $value ),
+						)
+					);
 				}
 				if ( ! isset( $node['props']['ratingCount'] ) && ! isset( $node['props']['reviewCount'] ) ) {
-					$this->add( 'FEAT-004', 'fail', 'high', $this->node_base( $node, "['ratingCount']" ) + array( 'property' => 'ratingCount', 'observed' => '(absent: neither ratingCount nor reviewCount)' ) );
+					$this->add(
+						'FEAT-004',
+						'fail',
+						'high',
+						$this->node_base( $node, "['ratingCount']" ) + array(
+							'property' => 'ratingCount',
+							'observed' => '(absent: neither ratingCount nor reviewCount)',
+						)
+					);
 				}
 			}
 			if ( Vocabulary::is_a( $types, 'BreadcrumbList' ) && isset( $node['props']['itemListElement'] ) && is_array( $node['props']['itemListElement'] ) ) {
@@ -524,7 +634,16 @@ class Evaluator {
 						$missing[] = 'item';
 					}
 					if ( ! empty( $missing ) ) {
-						$this->add( 'FEAT-005', 'fail', 'high', $this->node_base( $node, "['itemListElement'][" . $i . ']' ) + array( 'property' => 'itemListElement', 'observed' => 'Missing: ' . implode( ', ', $missing ), 'snippet' => self::scalar( $item ) ) );
+						$this->add(
+							'FEAT-005',
+							'fail',
+							'high',
+							$this->node_base( $node, "['itemListElement'][" . $i . ']' ) + array(
+								'property' => 'itemListElement',
+								'observed' => 'Missing: ' . implode( ', ', $missing ),
+								'snippet'  => self::scalar( $item ),
+							)
+						);
 					}
 				}
 			}
@@ -539,16 +658,32 @@ class Evaluator {
 					}
 					$ok = is_array( $value ) && ( Vocabulary::is_a( Graph::types_of( $value ), 'ImageObject' ) || isset( $value['url'] ) || isset( $value['contentUrl'] ) || isset( $value['@id'] ) );
 					if ( ! $ok ) {
-						$this->add( 'FEAT-006', 'fail', 'high', $this->node_base( $node, "['" . $prop . "']" ) + array( 'property' => $prop, 'observed' => self::scalar( $value ) ) );
+						$this->add(
+							'FEAT-006',
+							'fail',
+							'high',
+							$this->node_base( $node, "['" . $prop . "']" ) + array(
+								'property' => $prop,
+								'observed' => self::scalar( $value ),
+							)
+						);
 					}
 				}
 			}
 			if ( ( $node['top_level'] || $this->is_primary( $node ) ) && Vocabulary::is_a( $this->graph->all_types( $node ), 'LocalBusiness' ) ) {
-				$merged = $this->merged_props( $node );
+				$merged      = $this->merged_props( $node );
 				$address_key = '' !== $node['id'] ? $node['id'] : 'k' . $node['key'];
 				if ( empty( $merged['address'] ) && ! isset( $done_address[ $address_key ] ) ) {
 					$done_address[ $address_key ] = true;
-					$this->add( 'FEAT-007', 'review', 'high', $this->node_base( $node, "['address']" ) + array( 'property' => 'address', 'observed' => '(absent)' ) );
+					$this->add(
+						'FEAT-007',
+						'review',
+						'high',
+						$this->node_base( $node, "['address']" ) + array(
+							'property' => 'address',
+							'observed' => '(absent)',
+						)
+					);
 				}
 			}
 		}
@@ -563,7 +698,7 @@ class Evaluator {
 	 * @return bool
 	 */
 	private function copies_site( $url ) {
-		$path  = strtolower( (string) parse_url( $url, PHP_URL_PATH ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+		$path = strtolower( (string) parse_url( $url, PHP_URL_PATH ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
 		foreach ( (array) $this->ctx['own_hosts'] as $own ) {
 			$label = explode( '.', (string) preg_replace( '/^www\./', '', strtolower( $own ) ) );
 			if ( strlen( $label[0] ) >= 4 && false !== strpos( $path, '/' . $label[0] . '/wp-content/' ) ) {
@@ -579,7 +714,195 @@ class Evaluator {
 	 * when it is one or two letters away from one of these.
 	 */
 	const KNOWN_PROPERTIES = array(
-		'about', 'acceptedAnswer', 'accountablePerson', 'additionalType', 'address', 'addressCountry', 'addressLocality', 'addressRegion', 'aggregateRating', 'alternateName', 'alumni', 'answerCount', 'applicationCategory', 'areaServed', 'articleBody', 'articleSection', 'audience', 'author', 'availability', 'availableLanguage', 'award', 'bestRating', 'birthDate', 'birthPlace', 'branchCode', 'branchOf', 'brand', 'breadcrumb', 'caption', 'category', 'closes', 'colleague', 'contactPoint', 'contactType', 'contentLocation', 'contentUrl', 'copyrightHolder', 'copyrightYear', 'currenciesAccepted', 'dateCreated', 'dateModified', 'datePublished', 'dayOfWeek', 'department', 'description', 'duns', 'duration', 'email', 'employee', 'encodingFormat', 'endDate', 'familyName', 'faxNumber', 'founder', 'foundingDate', 'foundingLocation', 'funder', 'geo', 'givenName', 'hasCredential', 'hasMap', 'hasOccupation', 'hasOfferCatalog', 'hasPart', 'headline', 'height', 'honorificPrefix', 'honorificSuffix', 'identifier', 'image', 'inLanguage', 'isPartOf', 'item', 'itemListElement', 'itemListOrder', 'itemOffered', 'jobTitle', 'keywords', 'knowsAbout', 'knowsLanguage', 'latitude', 'legalName', 'license', 'location', 'logo', 'longitude', 'mainEntity', 'mainEntityOfPage', 'makesOffer', 'member', 'memberOf', 'name', 'numberOfEmployees', 'numberOfItems', 'offers', 'openingHours', 'openingHoursSpecification', 'opens', 'parentOrganization', 'paymentAccepted', 'position', 'postOfficeBoxNumber', 'postalCode', 'potentialAction', 'price', 'priceCurrency', 'priceRange', 'primaryImageOfPage', 'provider', 'publisher', 'query', 'ratingCount', 'ratingValue', 'review', 'reviewBody', 'reviewCount', 'reviewRating', 'sameAs', 'serviceArea', 'serviceType', 'slogan', 'speakable', 'startDate', 'streetAddress', 'subOrganization', 'subjectOf', 'suggestedAnswer', 'target', 'taxID', 'telephone', 'text', 'thumbnailUrl', 'title', 'upvoteCount', 'url', 'urlTemplate', 'validFrom', 'value', 'valueReference', 'vatID', 'width', 'worksFor', 'worstRating', 'propertyID', 'query-input', 'actionStatus', 'interactionStatistic', 'isAccessibleForFree', 'wordCount', 'thumbnail', 'video', 'embedUrl', 'uploadDate', 'representativeOfPage', 'significantLink', 'relatedLink', 'lastReviewed', 'reviewedBy', 'mentions', 'citation', 'accessibilityFeature', 'educationalCredentialAwarded', 'credentialCategory', 'recognizedBy', 'alumniOf', 'affiliation', 'nationality', 'spouse', 'knows', 'globalLocationNumber', 'isicV4', 'naics', 'leiCode', 'ownershipFundingInfo', 'publishingPrinciples', 'diversityPolicy', 'ethicsPolicy', 'correctionsPolicy', 'unnamedSourcesPolicy', 'actionableFeedbackPolicy', 'hoursAvailable', 'servesCuisine', 'keywords', 'itemReviewed', 'author', 'disambiguatingDescription', 'containedInPlace', 'containsPlace', 'addressRegion',
+		'about',
+		'acceptedAnswer',
+		'accountablePerson',
+		'additionalType',
+		'address',
+		'addressCountry',
+		'addressLocality',
+		'addressRegion',
+		'aggregateRating',
+		'alternateName',
+		'alumni',
+		'answerCount',
+		'applicationCategory',
+		'areaServed',
+		'articleBody',
+		'articleSection',
+		'audience',
+		'author',
+		'availability',
+		'availableLanguage',
+		'award',
+		'bestRating',
+		'birthDate',
+		'birthPlace',
+		'branchCode',
+		'branchOf',
+		'brand',
+		'breadcrumb',
+		'caption',
+		'category',
+		'closes',
+		'colleague',
+		'contactPoint',
+		'contactType',
+		'contentLocation',
+		'contentUrl',
+		'copyrightHolder',
+		'copyrightYear',
+		'currenciesAccepted',
+		'dateCreated',
+		'dateModified',
+		'datePublished',
+		'dayOfWeek',
+		'department',
+		'description',
+		'duns',
+		'duration',
+		'email',
+		'employee',
+		'encodingFormat',
+		'endDate',
+		'familyName',
+		'faxNumber',
+		'founder',
+		'foundingDate',
+		'foundingLocation',
+		'funder',
+		'geo',
+		'givenName',
+		'hasCredential',
+		'hasMap',
+		'hasOccupation',
+		'hasOfferCatalog',
+		'hasPart',
+		'headline',
+		'height',
+		'honorificPrefix',
+		'honorificSuffix',
+		'identifier',
+		'image',
+		'inLanguage',
+		'isPartOf',
+		'item',
+		'itemListElement',
+		'itemListOrder',
+		'itemOffered',
+		'jobTitle',
+		'keywords',
+		'knowsAbout',
+		'knowsLanguage',
+		'latitude',
+		'legalName',
+		'license',
+		'location',
+		'logo',
+		'longitude',
+		'mainEntity',
+		'mainEntityOfPage',
+		'makesOffer',
+		'member',
+		'memberOf',
+		'name',
+		'numberOfEmployees',
+		'numberOfItems',
+		'offers',
+		'openingHours',
+		'openingHoursSpecification',
+		'opens',
+		'parentOrganization',
+		'paymentAccepted',
+		'position',
+		'postOfficeBoxNumber',
+		'postalCode',
+		'potentialAction',
+		'price',
+		'priceCurrency',
+		'priceRange',
+		'primaryImageOfPage',
+		'provider',
+		'publisher',
+		'query',
+		'ratingCount',
+		'ratingValue',
+		'review',
+		'reviewBody',
+		'reviewCount',
+		'reviewRating',
+		'sameAs',
+		'serviceArea',
+		'serviceType',
+		'slogan',
+		'speakable',
+		'startDate',
+		'streetAddress',
+		'subOrganization',
+		'subjectOf',
+		'suggestedAnswer',
+		'target',
+		'taxID',
+		'telephone',
+		'text',
+		'thumbnailUrl',
+		'title',
+		'upvoteCount',
+		'url',
+		'urlTemplate',
+		'validFrom',
+		'value',
+		'valueReference',
+		'vatID',
+		'width',
+		'worksFor',
+		'worstRating',
+		'propertyID',
+		'query-input',
+		'actionStatus',
+		'interactionStatistic',
+		'isAccessibleForFree',
+		'wordCount',
+		'thumbnail',
+		'video',
+		'embedUrl',
+		'uploadDate',
+		'representativeOfPage',
+		'significantLink',
+		'relatedLink',
+		'lastReviewed',
+		'reviewedBy',
+		'mentions',
+		'citation',
+		'accessibilityFeature',
+		'educationalCredentialAwarded',
+		'credentialCategory',
+		'recognizedBy',
+		'alumniOf',
+		'affiliation',
+		'nationality',
+		'spouse',
+		'knows',
+		'globalLocationNumber',
+		'isicV4',
+		'naics',
+		'leiCode',
+		'ownershipFundingInfo',
+		'publishingPrinciples',
+		'diversityPolicy',
+		'ethicsPolicy',
+		'correctionsPolicy',
+		'unnamedSourcesPolicy',
+		'actionableFeedbackPolicy',
+		'hoursAvailable',
+		'servesCuisine',
+		'keywords',
+		'itemReviewed',
+		'author',
+		'disambiguatingDescription',
+		'containedInPlace',
+		'containsPlace',
+		'addressRegion',
 	);
 
 	/**
@@ -868,7 +1191,16 @@ class Evaluator {
 			// Corroborate against the body only: a stale site title is repeated
 			// in <title> and og:site_name, so those would agree with it.
 			if ( '' !== trim( $node['props']['name'] ) && ! $this->facts->has_name( $node['props']['name'], true ) ) {
-				$this->add( 'FACT-009', 'review', 'medium', $this->node_base( $node, "['name']" ) + array( 'property' => 'name', 'observed' => $node['props']['name'], 'comparison' => 'Not found in the page body (title and meta tags are not counted).' ) );
+				$this->add(
+					'FACT-009',
+					'review',
+					'medium',
+					$this->node_base( $node, "['name']" ) + array(
+						'property'   => 'name',
+						'observed'   => $node['props']['name'],
+						'comparison' => 'Not found in the page body (title and meta tags are not counted).',
+					)
+				);
 			}
 		}
 		$done = array();
@@ -883,18 +1215,36 @@ class Evaluator {
 			$done[ $key ] = true;
 			$merged       = $this->merged_props( $node );
 			if ( isset( $merged['legalName'] ) && is_string( $merged['legalName'] ) && ! preg_match( '/\b' . self::LEGAL_FORMS . '\s*$/i', trim( $merged['legalName'] ) ) ) {
-				$stem = trim( (string) preg_replace( '/[\s,]+(solicitors|lawyers|legal|law|& co\.?|and co\.?)$/i', '', trim( $merged['legalName'] ) ) );
+				$stem  = trim( (string) preg_replace( '/[\s,]+(solicitors|lawyers|legal|law|& co\.?|and co\.?)$/i', '', trim( $merged['legalName'] ) ) );
 				$parts = array();
 				foreach ( preg_split( '/\s+/', $stem ) as $token ) {
 					$parts[] = ( '&' === $token || 0 === strcasecmp( 'and', $token ) ) ? '(?:&|and)' : preg_quote( $token, '/' );
 				}
 				if ( '' !== $stem && preg_match( '/(?<![\p{L}\p{N}])' . implode( '\s*', $parts ) . '[\s,]+' . self::LEGAL_FORMS . '(?![\p{L}\p{N}])/iu', $this->facts->text, $m ) ) {
-					$this->add( 'FACT-011', 'review', 'medium', $this->node_base( $node, "['legalName']" ) + array( 'property' => 'legalName', 'observed' => $merged['legalName'], 'comparison' => 'The page names "' . $m[0] . '"' ) );
+					$this->add(
+						'FACT-011',
+						'review',
+						'medium',
+						$this->node_base( $node, "['legalName']" ) + array(
+							'property'   => 'legalName',
+							'observed'   => $merged['legalName'],
+							'comparison' => 'The page names "' . $m[0] . '"',
+						)
+					);
 				}
 			}
 			foreach ( $this->company_numbers( $merged ) as $number ) {
 				if ( false === stripos( preg_replace( '/\s+/', '', $this->facts->text ), $number ) ) {
-					$this->add( 'FACT-012', 'review', 'medium', $this->node_base( $node, "['identifier']" ) + array( 'property' => 'identifier', 'observed' => $number, 'comparison' => 'Not shown in the page text.' ) );
+					$this->add(
+						'FACT-012',
+						'review',
+						'medium',
+						$this->node_base( $node, "['identifier']" ) + array(
+							'property'   => 'identifier',
+							'observed'   => $number,
+							'comparison' => 'Not shown in the page text.',
+						)
+					);
 				}
 			}
 		}
@@ -967,7 +1317,15 @@ class Evaluator {
 					$named = $named || ( '' !== $name && false !== strpos( $name, $business ) );
 				}
 				if ( ! empty( $business_only ) || ( $named && ( isset( $props['telephone'] ) || isset( $props['address'] ) ) ) ) {
-					$this->add( 'SYN-008', 'review', 'high', $this->node_base( $node ) + array( 'observed' => implode( ', ', $types ) . ( isset( $props['name'] ) && is_string( $props['name'] ) ? ' named ' . $props['name'] : '' ), 'comparison' => empty( $business_only ) ? 'Carries a business name with a telephone or address.' : 'Carries business properties: ' . implode( ', ', $business_only ) ) );
+					$this->add(
+						'SYN-008',
+						'review',
+						'high',
+						$this->node_base( $node ) + array(
+							'observed'   => implode( ', ', $types ) . ( isset( $props['name'] ) && is_string( $props['name'] ) ? ' named ' . $props['name'] : '' ),
+							'comparison' => empty( $business_only ) ? 'Carries a business name with a telephone or address.' : 'Carries business properties: ' . implode( ', ', $business_only ),
+						)
+					);
 				}
 			}
 
@@ -985,7 +1343,16 @@ class Evaluator {
 					}
 				}
 				if ( '' !== $best ) {
-					$this->add( 'SYN-009', 'review', 'medium', $this->node_base( $node, "['" . $prop . "']" ) + array( 'property' => $prop, 'observed' => $prop, 'comparison' => 'Did you mean ' . $best . '?' ) );
+					$this->add(
+						'SYN-009',
+						'review',
+						'medium',
+						$this->node_base( $node, "['" . $prop . "']" ) + array(
+							'property'   => $prop,
+							'observed'   => $prop,
+							'comparison' => 'Did you mean ' . $best . '?',
+						)
+					);
 				}
 			}
 
@@ -998,13 +1365,31 @@ class Evaluator {
 
 			// SYN-011: provider on a business, hasPart pointing at a business.
 			if ( isset( $props['provider'] ) && Vocabulary::is_business( $types ) && ! Vocabulary::is_a( $types, 'Service' ) ) {
-				$this->add( 'SYN-011', 'review', 'high', $this->node_base( $node, "['provider']" ) + array( 'property' => 'provider', 'observed' => 'provider on ' . implode( ', ', $types ), 'comparison' => 'provider belongs to Service and CreativeWork, not to an organisation.' ) );
+				$this->add(
+					'SYN-011',
+					'review',
+					'high',
+					$this->node_base( $node, "['provider']" ) + array(
+						'property'   => 'provider',
+						'observed'   => 'provider on ' . implode( ', ', $types ),
+						'comparison' => 'provider belongs to Service and CreativeWork, not to an organisation.',
+					)
+				);
 			}
 			if ( isset( $props['hasPart'] ) && Vocabulary::is_a( $types, 'CreativeWork' ) ) {
 				foreach ( $this->graph->resolve( $props['hasPart'] ) as $part ) {
 					$part_types = $this->graph->all_types( $part );
 					if ( Vocabulary::is_business( $part_types ) || ( Vocabulary::is_a( $part_types, 'Place' ) && ! Vocabulary::is_a( $part_types, 'CreativeWork' ) ) ) {
-						$this->add( 'SYN-011', 'review', 'high', $this->node_base( $node, "['hasPart']" ) + array( 'property' => 'hasPart', 'observed' => 'hasPart points at ' . ( '' !== $part['id'] ? $part['id'] : implode( ', ', $part_types ) ), 'comparison' => 'hasPart expects a CreativeWork.' ) );
+						$this->add(
+							'SYN-011',
+							'review',
+							'high',
+							$this->node_base( $node, "['hasPart']" ) + array(
+								'property'   => 'hasPart',
+								'observed'   => 'hasPart points at ' . ( '' !== $part['id'] ? $part['id'] : implode( ', ', $part_types ) ),
+								'comparison' => 'hasPart expects a CreativeWork.',
+							)
+						);
 						break;
 					}
 				}
@@ -1039,7 +1424,17 @@ class Evaluator {
 				foreach ( array_unique( $m[1] ) as $place ) {
 					$needle = strtolower( $place );
 					if ( false === strpos( $places, $needle ) && false === strpos( $meta, $needle ) ) {
-						$this->add( 'REL-003', 'review', 'medium', $this->node_base( $node, "['description']" ) + array( 'property' => 'description', 'observed' => $place, 'comparison' => 'Not in any address, place name or the page text.', 'snippet' => $merged['description'] ) );
+						$this->add(
+							'REL-003',
+							'review',
+							'medium',
+							$this->node_base( $node, "['description']" ) + array(
+								'property'   => 'description',
+								'observed'   => $place,
+								'comparison' => 'Not in any address, place name or the page text.',
+								'snippet'    => $merged['description'],
+							)
+						);
 						break;
 					}
 				}
@@ -1051,7 +1446,16 @@ class Evaluator {
 			$main = is_array( $main ) && isset( $main['@id'] ) && is_string( $main['@id'] ) ? $main['@id'] : ( is_string( $main ) ? trim( $main ) : '' );
 			$path = (string) parse_url( $url, PHP_URL_PATH ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
 			if ( '' !== $url && '' !== $main && '' !== trim( $path, '/' ) && self::url_key( $url ) !== self::url_key( $main ) && self::url_key( $main ) === self::url_key( $this->ctx['page_url'] ) && $this->is_own_host( strtolower( (string) parse_url( $url, PHP_URL_HOST ) ) ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
-				$this->add( 'URL-006', 'review', 'high', $this->node_base( $node, "['url']" ) + array( 'property' => 'url', 'observed' => $url, 'comparison' => 'mainEntityOfPage: ' . $main ) );
+				$this->add(
+					'URL-006',
+					'review',
+					'high',
+					$this->node_base( $node, "['url']" ) + array(
+						'property'   => 'url',
+						'observed'   => $url,
+						'comparison' => 'mainEntityOfPage: ' . $main,
+					)
+				);
 			}
 
 			// FEAT-008: review items collected by another site.
@@ -1063,7 +1467,16 @@ class Evaluator {
 					$publisher = is_array( $publisher ) ? $this->deref( $publisher ) : $publisher;
 					$name      = is_string( $publisher ) ? $publisher : ( is_array( $publisher ) && isset( $publisher['name'] ) && is_string( $publisher['name'] ) ? $publisher['name'] : '' );
 					if ( '' !== $name && ( '' === $own || false === strpos( PageFacts::compact( $name ), $own ) ) ) {
-						$this->add( 'FEAT-008', 'review', 'high', $this->node_base( $node, "['review']" ) + array( 'property' => 'review', 'observed' => 'Review publisher: ' . $name, 'comparison' => 'The reviews were collected by another site, not by this business.' ) );
+						$this->add(
+							'FEAT-008',
+							'review',
+							'high',
+							$this->node_base( $node, "['review']" ) + array(
+								'property'   => 'review',
+								'observed'   => 'Review publisher: ' . $name,
+								'comparison' => 'The reviews were collected by another site, not by this business.',
+							)
+						);
 						break;
 					}
 				}
@@ -1082,7 +1495,16 @@ class Evaluator {
 				foreach ( Graph::is_list( $node['props']['memberOf'] ) ? $node['props']['memberOf'] : array( $node['props']['memberOf'] ) as $member ) {
 					$name = is_string( $member ) ? $member : ( is_array( $member ) && isset( $member['name'] ) && is_string( $member['name'] ) ? $member['name'] : '' );
 					if ( preg_match( '/companies house|registrar of companies|companies registry/i', $name ) ) {
-						$this->add( 'REL-004', 'review', 'high', $this->node_base( $node, "['memberOf']" ) + array( 'property' => 'memberOf', 'observed' => $name, 'comparison' => 'A registrar is not a membership body; use identifier or sameAs for the registration.' ) );
+						$this->add(
+							'REL-004',
+							'review',
+							'high',
+							$this->node_base( $node, "['memberOf']" ) + array(
+								'property'   => 'memberOf',
+								'observed'   => $name,
+								'comparison' => 'A registrar is not a membership body; use identifier or sameAs for the registration.',
+							)
+						);
 					}
 				}
 			}
@@ -1100,7 +1522,16 @@ class Evaluator {
 				foreach ( self::prop_values( $node['props'], $prop ) as $value ) {
 					$host = strtolower( (string) parse_url( $value, PHP_URL_HOST ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
 					if ( preg_match( '/(^|\.)nitrocdn\.com$/', $host ) || preg_match( '#/rev-[0-9a-f]{5,}/#i', $value ) ) {
-						$this->add( 'URL-007', 'review', 'medium', $this->node_base( $node, "['" . $prop . "']" ) + array( 'property' => $prop, 'observed' => $value, 'comparison' => 'Reference the original file on this site instead.' ) );
+						$this->add(
+							'URL-007',
+							'review',
+							'medium',
+							$this->node_base( $node, "['" . $prop . "']" ) + array(
+								'property'   => $prop,
+								'observed'   => $value,
+								'comparison' => 'Reference the original file on this site instead.',
+							)
+						);
 					}
 				}
 			}
@@ -1112,7 +1543,16 @@ class Evaluator {
 				}
 				$labels = array_map( array( __CLASS__, 'entity_label' ), array_keys( $entities ) );
 				$nodes  = array_values( $entities );
-				$this->add( 'REL-005', 'review', 'high', $this->node_base( $nodes[1] ) + array( 'property' => 'url', 'observed' => $kind . ' entities for ' . $url . ': ' . implode( '; ', $labels ), 'comparison' => 'Different identifiers stop them merging into one description.' ) );
+				$this->add(
+					'REL-005',
+					'review',
+					'high',
+					$this->node_base( $nodes[1] ) + array(
+						'property'   => 'url',
+						'observed'   => $kind . ' entities for ' . $url . ': ' . implode( '; ', $labels ),
+						'comparison' => 'Different identifiers stop them merging into one description.',
+					)
+				);
 			}
 		}
 	}
@@ -1247,7 +1687,7 @@ class Evaluator {
 				}
 				$values = Graph::is_list( $node['props'][ $prop ] ) ? $node['props'][ $prop ] : array( $node['props'][ $prop ] );
 				foreach ( $values as $value ) {
-					$url = is_string( $value ) ? $value : ( is_array( $value ) ? ( isset( $value['contentUrl'] ) && is_string( $value['contentUrl'] ) ? $value['contentUrl'] : ( isset( $value['url'] ) && is_string( $value['url'] ) ? $value['url'] : '' ) ) : '' );
+					$url  = is_string( $value ) ? $value : ( is_array( $value ) ? ( isset( $value['contentUrl'] ) && is_string( $value['contentUrl'] ) ? $value['contentUrl'] : ( isset( $value['url'] ) && is_string( $value['url'] ) ? $value['url'] : '' ) ) : '' );
 					$host = strtolower( (string) parse_url( $url, PHP_URL_HOST ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
 					if ( '' !== $url && $this->is_own_host( $host ) ) {
 						$resources[ $url ] = array(
@@ -1499,9 +1939,9 @@ class Evaluator {
 	 * @return string
 	 */
 	public static function url_key( $url ) {
-		$url = (string) preg_replace( '/#.*$/', '', trim( (string) $url ) );
-		$url = (string) preg_replace( '#^https?://#i', '', $url );
-		$url = (string) preg_replace( '#^www\.#i', '', $url );
+		$url   = (string) preg_replace( '/#.*$/', '', trim( (string) $url ) );
+		$url   = (string) preg_replace( '#^https?://#i', '', $url );
+		$url   = (string) preg_replace( '#^www\.#i', '', $url );
 		$parts = explode( '/', $url, 2 );
 		$url   = strtolower( $parts[0] ) . ( isset( $parts[1] ) ? '/' . $parts[1] : '' );
 		return rtrim( $url, '/' );

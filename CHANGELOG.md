@@ -4,6 +4,13 @@ All notable changes to MLT Schema Audit. Dates are UK dates. Versions follow sem
 
 ## Unreleased (0.1.0)
 
+### Stage 6: tests and static analysis
+
+- 105 unit tests (`php tests/run-tests.php`, no WordPress needed): every acceptance case that is pure logic, threats F1 to F7, M1, M2, E1, E2, D1 and F6 at the discovery level, plus the 72 fixture cases.
+- 17 integration tests (`wp eval-file tests/integration/run.php` on the disposable site; set `MLTSA_IT_FULL=1` for the 500-URL gate): S2, S3, S4 (setting and constant), M2 to M6, A1 to A6, E1, E2, D2, the schedule, catch-up, recipient rebuild and both uninstall paths. A6 compares every non-plugin table and option before and after activation, an audit, an export, a scheduled start, deactivation and uninstall.
+- PHPCS with WordPress-Extra, the WordPress security and database sniffs, and PHP 7.4 compatibility (`composer install`, then `vendor/bin/phpcs`): no errors or warnings. Development dependencies only, pinned in `composer.lock`; the plugin has no runtime dependencies.
+- Each request handler now calls `check_admin_referer()` itself, so the nonce check is visible where input is read.
+
 ### Stage 5: monthly operations, verified
 
 - Proven on the disposable site by `tests/integration/run.php` (16 tests): monitoring cannot be switched on until scope, recipients and schedule are confirmed, then exactly one start is scheduled; deactivation leaves no `mltsa_` event; reactivation rebuilds the next start only; a missed month runs once as a catch-up with its lateness recorded; a second start for the same month, or any start while a run is in progress, is refused; the kill switch setting cancels a monthly run without another request while manual audits still start; `MLTSA_DISABLE` stops manual starts, the worker and mail; no recipients means no mail and never `admin_email`; a clone or staging copy pauses all mail until recipients are reconfirmed; an interrupted send becomes `delivery_unknown` and is never resent; failures retry at most three times; a recipient change rebuilds unsent notifications.

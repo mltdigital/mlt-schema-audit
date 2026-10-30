@@ -121,8 +121,8 @@ class Fetcher {
 				return $this->finish( $result, $outcome, $response['error_code'], $started );
 			}
 
-			$status            = (int) $response['status'];
-			$result['chain'][] = array(
+			$status              = (int) $response['status'];
+			$result['chain'][]   = array(
 				'url'    => $current,
 				'status' => $status,
 			);
@@ -179,7 +179,7 @@ class Fetcher {
 		$tries = 1 + max( 0, (int) $this->limits['retries'] );
 		for ( $i = 0; $i < $tries; $i++ ) {
 			++$result['attempts'];
-			$response = $this->client->request(
+			$response  = $this->client->request(
 				$url,
 				$ip,
 				array(
