@@ -197,3 +197,51 @@ mltsa_test(
 		check( ! $policy->check_url( 'gopher://www.example-legal.co.uk/' )['ok'], 'gopher refused' );
 	}
 );
+
+mltsa_test(
+	'F1 review 2026-10-30: IPv6 spellings of private addresses are judged by their bytes',
+	static function () {
+		$cases = array(
+			'::ffff:7f00:1'           => 'loopback',
+			'::ffff:a00:1'            => 'private',
+			'::ffff:a9fe:a9fe'        => 'metadata',
+			'0:0:0:0:0:0:0:1'         => 'loopback',
+			'0000::0001'              => 'loopback',
+			'0:0:0:0:0:ffff:7f00:1'   => 'loopback',
+			'64:ff9b::7f00:1'         => 'loopback',
+			'2002:c0a8:0101::1'       => 'private',
+			'::7f00:1'                => 'reserved',
+			'::'                      => 'reserved',
+			'fd00:ec2:0:0:0:0:0:254'  => 'metadata',
+			'fec0::1'                 => 'private',
+			'2001:0:4136:e378::1'     => 'reserved',
+			'2a00:1450:4009:81f::200e' => 'public',
+			'::ffff:203.0.114.10'     => 'public',
+		);
+		foreach ( $cases as $ip => $class ) {
+			check_same( $class, UrlPolicy::classify_ip( $ip ), 'classify ' . $ip );
+		}
+		$policy = mltsa_policy( false, array( 'www.example-legal.co.uk' => array( '::ffff:7f00:1' ) ) );
+		$check  = $policy->check_host_addresses( 'www.example-legal.co.uk' );
+		check_same( false, $check['ok'], 'mapped loopback refused without the private-self allowance' );
+	}
+);
+
+mltsa_test(
+	'F1 review 2026-10-30: dot segments, encoded dots and doubled slashes cannot reach denied paths',
+	static function () {
+		$policy = mltsa_policy();
+		foreach ( array( '/public/../wp-admin/', '/./wp-admin/', '/page/../wp-login.php', '/%2e%2e/wp-admin/', '/a/%2E%2E/xmlrpc.php', '//wp-admin/', '/x/..%2fwp-json/', '/a%5c..%5cwp-admin/', '/%252e%252e/wp-admin/' ) as $path ) {
+			$check = $policy->check_url( 'https://www.example-legal.co.uk' . $path );
+			check_same( 'denied_path', $check['reason'], 'denied ' . $path );
+		}
+		check_same( true, $policy->check_url( 'https://www.example-legal.co.uk/services/../about/' )['ok'], 'harmless traversal still allowed' );
+		check_same( 'https://www.example-legal.co.uk/about/', $policy->normalise( 'https://www.example-legal.co.uk/services/../about/' ), 'normalise removes dot segments' );
+		check_same( '/a/', UrlPolicy::remove_dot_segments( '/a/b/..' ), 'trailing dot segment leaves a directory' );
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/start/'] = array( 'status' => 302, 'headers' => array( 'location' => 'https://www.example-legal.co.uk/x/../wp-admin/' ) );
+		$result = mltsa_fetcher( $client )->fetch( 'https://www.example-legal.co.uk/start/' );
+		check_same( 'blocked', $result['outcome'], 'absolute redirect with traversal refused' );
+		check_same( 1, count( $client->requests ), 'no request made to the traversal target' );
+	}
+);

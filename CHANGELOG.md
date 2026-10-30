@@ -4,6 +4,15 @@ All notable changes to MLT Schema Audit. Dates are UK dates. Versions follow sem
 
 ## Unreleased (0.1.0)
 
+### Review fixes (30 October 2026)
+
+Two code reviews on 30 October found defects to fix before any pilot. Fixed so far:
+
+- Private-address check (review finding 1): IP addresses are now classified by their bytes, not their spelling. `::ffff:7f00:1`, `0:0:0:0:0:0:0:1`, NAT64 and 6to4 forms of loopback, private and metadata addresses were treated as public and are now refused.
+- Denied paths (review finding 11): the admin, login, XML-RPC and REST deny list is now checked against the path as a server would read it (decoded, dot segments and repeated slashes removed), so `/public/../wp-admin/`, `/%2e%2e/wp-admin/` and `//wp-admin/` are refused, including in absolute redirect locations. Frozen URLs have dot segments removed.
+
+Still open: findings 2 to 10 of the first review and the confirmed items of the second (see `STATE.md` in the project folder).
+
 ### Stage 7: documents and release build
 
 - Staff guide, server cron hand-over note for the Guru Hosting servers, contract revision notes, README.
