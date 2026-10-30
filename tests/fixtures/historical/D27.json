@@ -1,0 +1,5 @@
+{"id":"D27","kind":"defect","category":"features","summary":"Self-serving ratings on the main node and on a branch LegalService.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"LegalService","@id":"https://ridleygask.example/#org","name":"Ridley & Gask","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.8","bestRating":"5","worstRating":"1","reviewCount":438,"ratingCount":438}},{"@type":"LegalService","@id":"https://ridleygask.example/#branch-glenmuir","name":"Ridley & Gask Glenmuir","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.1","reviewCount":14}}]}]}],
+"expect":{"fires":["FEAT-001"],"min_count":{"FEAT-001":2},"no_fail":true}}

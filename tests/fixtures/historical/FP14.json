@@ -1,0 +1,5 @@
+{"id":"FP14","kind":"must_not_flag","category":"facts","summary":"Equivalent phone formats: +44 without spaces in schema, tel: link with a space on the page.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask Portlarch, 51 Harbour Street, Portlarch KA91 5DX</p><a href=\"tel:01632 960341\">Call us</a>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://ridleygask.example/#office-portlarch","name":"Ridley & Gask Portlarch","telephone":"+441632960341","address":{"@type":"PostalAddress","streetAddress":"51 Harbour Street","addressLocality":"Portlarch","postalCode":"KA91 5DX","addressCountry":"GB"}}]}],
+"expect":{"clean":true}}

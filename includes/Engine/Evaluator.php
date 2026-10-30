@@ -71,6 +71,13 @@ class Evaluator {
 	private $blocks;
 
 	/**
+	 * Own-host @id references not defined on the page, for ID-003.
+	 *
+	 * @var array
+	 */
+	private $refs = array();
+
+	/**
 	 * Constructor.
 	 *
 	 * @param array $context { page_url, own_hosts, home_scheme, staging_patterns (extra regexes),
@@ -107,6 +114,11 @@ class Evaluator {
 		$this->fact_rules();
 		$this->url_rules( (string) $extraction['canonical'] );
 		$this->feature_rules();
+		$this->duplicate_rules();
+		$this->address_rules();
+		$this->identity_fact_rules();
+		$this->structure_rules();
+		$this->relevance_rules( $extraction );
 
 		$parsed = 0;
 		foreach ( $this->blocks as $block ) {
@@ -195,11 +207,12 @@ class Evaluator {
 			if ( count( $defs ) < 2 ) {
 				continue;
 			}
-			foreach ( array( 'name', 'legalName', 'telephone', 'url', 'email', 'postalCode', 'streetAddress' ) as $prop ) {
-				$seen = array();
+			foreach ( array( 'name', 'legalName', 'telephone', 'url', 'email', 'postalCode', 'streetAddress', 'logo', 'aggregateRating', 'itemListElement' ) as $prop ) {
+				$seen    = array();
+				$complex = in_array( $prop, array( 'logo', 'aggregateRating', 'itemListElement' ), true );
 				foreach ( $defs as $def ) {
-					foreach ( self::prop_values( $def['props'], $prop ) as $value ) {
-						$norm = self::normalise_for( $prop, $value );
+					foreach ( $complex ? $this->complex_values( $def['props'], $prop ) : self::prop_values( $def['props'], $prop ) as $value ) {
+						$norm = $complex ? $value : self::normalise_for( $prop, $value );
 						if ( '' !== $norm && ! isset( $seen[ $norm ] ) ) {
 							$seen[ $norm ] = array( $value, $def );
 						}
@@ -249,16 +262,21 @@ class Evaluator {
 			}
 		}
 
-		// ID-003: reference to an own-host entity never defined on the page.
-		$reported = array();
+		// ID-003 is judged across the whole site (SiteRules), because an @id
+		// defined on another page of the site is not dangling.
+		$this->refs = array();
 		foreach ( $this->graph->nodes as $node ) {
-			if ( ! $node['is_ref'] || isset( $reported[ $node['id'] ] ) ) {
+			if ( ! $node['is_ref'] ) {
 				continue;
 			}
 			$host = strtolower( (string) parse_url( $node['id'], PHP_URL_HOST ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
-			if ( $this->is_own_host( $host ) && empty( $this->graph->definitions( $node['id'] ) ) ) {
-				$reported[ $node['id'] ] = true;
-				$this->add( 'ID-003', 'review', 'medium', $this->node_base( $node ) + array( 'observed' => $node['id'] ) );
+			// An @id without a fragment names a page by its own URL, which
+			// exists whether or not the page also describes itself.
+			if ( false !== strpos( $node['id'], '#' ) && $this->is_own_host( $host ) && empty( $this->graph->definitions( $node['id'] ) ) && ! isset( $this->refs[ $node['id'] ] ) ) {
+				$this->refs[ $node['id'] ] = array(
+					'path'  => $node['path'],
+					'block' => $node['block'],
+				);
 			}
 		}
 	}
@@ -394,6 +412,10 @@ class Evaluator {
 				);
 				if ( preg_match( '#^(https?:)?//([^/\s?\#:]+)#i', $value, $m ) ) {
 					$host = strtolower( $m[2] );
+					if ( ! $this->is_own_host( $host ) && ! isset( $seen[ 'stg|' . $value ] ) && $this->copies_site( $value ) ) {
+						$seen[ 'stg|' . $value ] = true;
+						$this->add( 'URL-001', 'fail', 'high', $base + array( 'comparison' => 'The path names this site and continues into wp-content, so it is a copy of this site on another server.' ) );
+					}
 					if ( ! $this->is_own_host( $host ) && ! isset( $seen[ 'stg|' . $value ] ) ) {
 						foreach ( $patterns as $pattern ) {
 							if ( @preg_match( $pattern, $host ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Staff-entered patterns are validated on save; a bad one must not stop the run.
@@ -408,8 +430,8 @@ class Evaluator {
 						$this->add( 'URL-002', 'review', 'high', $base );
 					}
 				}
-				if ( in_array( $prop, array( 'url', 'sameAs', 'logo', 'image', 'contentUrl', 'thumbnailUrl', 'hasMap', 'item' ), true ) && ! isset( $seen[ 'bad|' . $value ] ) ) {
-					if ( preg_match( '/\s/', trim( $value ) ) || false !== strpos( $value, '&amp;' ) || ! preg_match( '#^https?://[^/\s]+#i', trim( $value ) ) ) {
+				if ( in_array( $prop, array( 'url', 'sameAs', 'logo', 'image', 'contentUrl', 'thumbnailUrl', 'hasMap', 'item', 'mainEntityOfPage' ), true ) && ! isset( $seen[ 'bad|' . $value ] ) ) {
+					if ( trim( $value ) !== $value || preg_match( '/\s/', trim( $value ) ) || false !== strpos( $value, '&amp;' ) || ! preg_match( '#^https?://[^/\s]+#i', trim( $value ) ) ) {
 						$seen[ 'bad|' . $value ] = true;
 						$this->add( 'URL-005', 'review', 'high', $base );
 					}
@@ -533,6 +555,643 @@ class Evaluator {
 	}
 
 	/**
+	 * Whether an off-site URL is a copy of this site: a path segment equal
+	 * to the site's own name followed by wp-content (a partner's staging
+	 * server holding the client's WordPress).
+	 *
+	 * @param string $url URL.
+	 * @return bool
+	 */
+	private function copies_site( $url ) {
+		$path  = strtolower( (string) parse_url( $url, PHP_URL_PATH ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+		foreach ( (array) $this->ctx['own_hosts'] as $own ) {
+			$label = explode( '.', (string) preg_replace( '/^www\./', '', strtolower( $own ) ) );
+			if ( strlen( $label[0] ) >= 4 && false !== strpos( $path, '/' . $label[0] . '/wp-content/' ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Properties schema.org defines that pages commonly use, for spotting a
+	 * misspelt property name (SYN-009). An unknown name is only reported
+	 * when it is one or two letters away from one of these.
+	 */
+	const KNOWN_PROPERTIES = array(
+		'about', 'acceptedAnswer', 'accountablePerson', 'additionalType', 'address', 'addressCountry', 'addressLocality', 'addressRegion', 'aggregateRating', 'alternateName', 'alumni', 'answerCount', 'applicationCategory', 'areaServed', 'articleBody', 'articleSection', 'audience', 'author', 'availability', 'availableLanguage', 'award', 'bestRating', 'birthDate', 'birthPlace', 'branchCode', 'branchOf', 'brand', 'breadcrumb', 'caption', 'category', 'closes', 'colleague', 'contactPoint', 'contactType', 'contentLocation', 'contentUrl', 'copyrightHolder', 'copyrightYear', 'currenciesAccepted', 'dateCreated', 'dateModified', 'datePublished', 'dayOfWeek', 'department', 'description', 'duns', 'duration', 'email', 'employee', 'encodingFormat', 'endDate', 'familyName', 'faxNumber', 'founder', 'foundingDate', 'foundingLocation', 'funder', 'geo', 'givenName', 'hasCredential', 'hasMap', 'hasOccupation', 'hasOfferCatalog', 'hasPart', 'headline', 'height', 'honorificPrefix', 'honorificSuffix', 'identifier', 'image', 'inLanguage', 'isPartOf', 'item', 'itemListElement', 'itemListOrder', 'itemOffered', 'jobTitle', 'keywords', 'knowsAbout', 'knowsLanguage', 'latitude', 'legalName', 'license', 'location', 'logo', 'longitude', 'mainEntity', 'mainEntityOfPage', 'makesOffer', 'member', 'memberOf', 'name', 'numberOfEmployees', 'numberOfItems', 'offers', 'openingHours', 'openingHoursSpecification', 'opens', 'parentOrganization', 'paymentAccepted', 'position', 'postOfficeBoxNumber', 'postalCode', 'potentialAction', 'price', 'priceCurrency', 'priceRange', 'primaryImageOfPage', 'provider', 'publisher', 'query', 'ratingCount', 'ratingValue', 'review', 'reviewBody', 'reviewCount', 'reviewRating', 'sameAs', 'serviceArea', 'serviceType', 'slogan', 'speakable', 'startDate', 'streetAddress', 'subOrganization', 'subjectOf', 'suggestedAnswer', 'target', 'taxID', 'telephone', 'text', 'thumbnailUrl', 'title', 'upvoteCount', 'url', 'urlTemplate', 'validFrom', 'value', 'valueReference', 'vatID', 'width', 'worksFor', 'worstRating', 'propertyID', 'query-input', 'actionStatus', 'interactionStatistic', 'isAccessibleForFree', 'wordCount', 'thumbnail', 'video', 'embedUrl', 'uploadDate', 'representativeOfPage', 'significantLink', 'relatedLink', 'lastReviewed', 'reviewedBy', 'mentions', 'citation', 'accessibilityFeature', 'educationalCredentialAwarded', 'credentialCategory', 'recognizedBy', 'alumniOf', 'affiliation', 'nationality', 'spouse', 'knows', 'globalLocationNumber', 'isicV4', 'naics', 'leiCode', 'ownershipFundingInfo', 'publishingPrinciples', 'diversityPolicy', 'ethicsPolicy', 'correctionsPolicy', 'unnamedSourcesPolicy', 'actionableFeedbackPolicy', 'hoursAvailable', 'servesCuisine', 'keywords', 'itemReviewed', 'author', 'disambiguatingDescription', 'containedInPlace', 'containsPlace', 'addressRegion',
+	);
+
+	/**
+	 * Words in a legal name that show the registered entity.
+	 */
+	const LEGAL_FORMS = '(?:LLP|L\.L\.P\.|Ltd\.?|Limited|PLC|LP|CIC|Unlimited)';
+
+	/**
+	 * Duplicate and conflicting business entities on one page (ID-004, ID-005).
+	 */
+	private function duplicate_rules() {
+		$entities = array();
+		foreach ( $this->graph->nodes as $node ) {
+			if ( $node['is_ref'] || ! Vocabulary::is_business( $this->graph->all_types( $node ) ) ) {
+				continue;
+			}
+			$key = '' !== $node['id'] ? $node['id'] : 'k' . $node['key'];
+			if ( isset( $entities[ $key ] ) ) {
+				continue;
+			}
+			$merged = $this->merged_props( $node );
+			$phones = array_values( array_unique( array_filter( array_map( array( PageFacts::class, 'phone_nsn' ), self::prop_values( $merged, 'telephone' ) ) ) ) );
+			sort( $phones );
+			$entities[ $key ] = array(
+				'node'      => $node,
+				'name'      => isset( $merged['name'] ) && is_string( $merged['name'] ) ? PageFacts::compact( $merged['name'] ) : '',
+				'phones'    => $phones,
+				'addresses' => $this->address_keys( $merged ),
+				'links'     => self::referenced_ids( $merged ),
+			);
+		}
+		$keys = array_keys( $entities );
+		$done = array();
+		foreach ( $keys as $i => $a ) {
+			foreach ( array_slice( $keys, $i + 1 ) as $b ) {
+				$ea = $entities[ $a ];
+				$eb = $entities[ $b ];
+				if ( ! empty( $ea['phones'] ) && ! empty( $eb['phones'] ) && array_intersect( $ea['addresses'], $eb['addresses'] ) && ! array_intersect( $ea['phones'], $eb['phones'] ) && ! isset( $done[ 'p' . $b ] ) ) {
+					$done[ 'p' . $b ] = true;
+					$this->add(
+						'ID-004',
+						'review',
+						'high',
+						$this->node_base( $eb['node'], "['telephone']" ) + array(
+							'property'   => 'telephone',
+							'observed'   => implode( ', ', array_map( array( __CLASS__, 'display_nsn' ), $eb['phones'] ) ),
+							'comparison' => implode( ', ', array_map( array( __CLASS__, 'display_nsn' ), $ea['phones'] ) ) . ' on ' . self::entity_label( $a ) . ' at the same address',
+						)
+					);
+				}
+				$linked = in_array( $a, $eb['links'], true ) || in_array( $b, $ea['links'], true );
+				if ( '' !== $ea['name'] && $ea['name'] === $eb['name'] && ! $linked && ! isset( $done[ 'n' . $b ] ) ) {
+					$done[ 'n' . $b ] = true;
+					$this->add(
+						'ID-005',
+						'review',
+						'medium',
+						$this->node_base( $eb['node'] ) + array(
+							'property'   => 'name',
+							'observed'   => self::entity_label( $b ),
+							'comparison' => 'Same name as ' . self::entity_label( $a ) . ', with no @id or link joining them',
+						)
+					);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Readable label for an entity key.
+	 *
+	 * @param string $key Entity key (@id, or k + node key).
+	 * @return string
+	 */
+	private static function entity_label( $key ) {
+		return 0 === strpos( $key, 'k' ) && ctype_digit( substr( $key, 1 ) ) ? 'an entity without @id' : $key;
+	}
+
+	/**
+	 * Comparable address keys of an entity: street and postcode, or postcode.
+	 *
+	 * @param array $props Merged properties.
+	 * @return array
+	 */
+	private function address_keys( array $props ) {
+		$out = array();
+		foreach ( $this->addresses_of( $props ) as $address ) {
+			$postcode = isset( $address['postalCode'] ) && is_string( $address['postalCode'] ) ? PageFacts::postcode_compact( $address['postalCode'] ) : '';
+			$street   = isset( $address['streetAddress'] ) && is_string( $address['streetAddress'] ) ? PageFacts::compact( $address['streetAddress'] ) : '';
+			if ( '' !== $postcode || '' !== $street ) {
+				$out[] = $street . '|' . $postcode;
+			}
+		}
+		return array_values( array_unique( $out ) );
+	}
+
+	/**
+	 * Address objects of an entity, with references resolved.
+	 *
+	 * @param array $props Properties.
+	 * @return array
+	 */
+	private function addresses_of( array $props ) {
+		if ( ! isset( $props['address'] ) || ! is_array( $props['address'] ) ) {
+			return array();
+		}
+		$out = array();
+		foreach ( Graph::is_list( $props['address'] ) ? $props['address'] : array( $props['address'] ) as $address ) {
+			if ( is_array( $address ) ) {
+				$out[] = $this->deref( $address );
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * An object, or the first definition of the @id it references.
+	 *
+	 * @param array $value Object.
+	 * @return array
+	 */
+	private function deref( array $value ) {
+		if ( isset( $value['@id'] ) && is_string( $value['@id'] ) && 1 === count( $value ) ) {
+			$defs = $this->graph->definitions( $this->graph->resolve_id( $value['@id'] ) );
+			if ( ! empty( $defs ) ) {
+				return $defs[0]['props'];
+			}
+		}
+		return $value;
+	}
+
+	/**
+	 * Every @id an entity refers to (one level deep), plus sameAs values.
+	 *
+	 * @param array $props Properties.
+	 * @return array
+	 */
+	private static function referenced_ids( array $props ) {
+		$out = array();
+		foreach ( $props as $prop => $value ) {
+			if ( '@id' === $prop ) {
+				continue;
+			}
+			if ( 'sameAs' === $prop ) {
+				foreach ( (array) $value as $same ) {
+					if ( is_string( $same ) ) {
+						$out[] = $same;
+					}
+				}
+				continue;
+			}
+			if ( ! is_array( $value ) ) {
+				continue;
+			}
+			foreach ( Graph::is_list( $value ) ? $value : array( $value ) as $item ) {
+				if ( is_array( $item ) && isset( $item['@id'] ) && is_string( $item['@id'] ) ) {
+					$out[] = $item['@id'];
+				}
+			}
+		}
+		return array_values( array_unique( $out ) );
+	}
+
+	/**
+	 * Addresses and phones against the page text (FACT-007, FACT-008,
+	 * FACT-010, REL-006).
+	 */
+	private function address_rules() {
+		$streets  = array();
+		$declared = array();
+		$has_biz  = false;
+		foreach ( $this->graph->nodes as $node ) {
+			if ( $node['is_ref'] ) {
+				continue;
+			}
+			$types = $this->graph->all_types( $node );
+			foreach ( $this->addresses_of( $node['props'] ) as $i => $address ) {
+				$postcode = isset( $address['postalCode'] ) && is_string( $address['postalCode'] ) ? $address['postalCode'] : '';
+				$compact  = PageFacts::postcode_compact( $postcode );
+				$street   = isset( $address['streetAddress'] ) && is_string( $address['streetAddress'] ) ? trim( $address['streetAddress'] ) : '';
+				if ( '' !== $compact ) {
+					$declared[ $compact ] = true;
+				}
+				if ( '' === $compact || '' === $street ) {
+					continue;
+				}
+				$has_biz = $has_biz || Vocabulary::is_business( $types );
+				$base    = $this->node_base( $node, "['address']['postalCode']" ) + array(
+					'property' => 'postalCode',
+					'observed' => $postcode . ' for ' . $street,
+				);
+				$key     = PageFacts::compact( $street );
+				if ( isset( $streets[ $key ] ) && $streets[ $key ] !== $compact ) {
+					$this->add( 'FACT-008', 'review', 'high', $base + array( 'comparison' => 'The same street address is declared with ' . $streets[ $key ] . ' elsewhere in the markup.' ) );
+				} elseif ( ! isset( $streets[ $key ] ) ) {
+					$streets[ $key ] = $compact;
+				}
+				if ( ! $this->facts->has_postcode( $postcode ) ) {
+					$shown = array_values( array_diff( $this->facts->postcodes_after_street( $street ), array( $compact ) ) );
+					if ( ! empty( $shown ) ) {
+						$this->add( 'FACT-007', 'fail', 'high', $base + array( 'comparison' => 'The page shows ' . $street . ' with ' . $shown[0] ) );
+					}
+				}
+			}
+		}
+
+		// FACT-010: a phone printed next to a different office's postcode.
+		$offsets = $this->facts->postcode_offsets();
+		foreach ( $this->primary_businesses() as $node ) {
+			$merged    = $this->merged_props( $node );
+			$postcodes = array();
+			foreach ( $this->addresses_of( $merged ) as $address ) {
+				if ( isset( $address['postalCode'] ) && is_string( $address['postalCode'] ) && '' !== PageFacts::postcode_compact( $address['postalCode'] ) ) {
+					$postcodes[] = PageFacts::postcode_compact( $address['postalCode'] );
+				}
+			}
+			if ( empty( $postcodes ) ) {
+				continue;
+			}
+			foreach ( self::prop_values( $merged, 'telephone' ) as $phone ) {
+				if ( ! $this->facts->has_phone( $phone ) ) {
+					continue;
+				}
+				$beside = array();
+				foreach ( $this->facts->phone_offsets( $phone ) as $at ) {
+					$best = null;
+					foreach ( $offsets as $pc ) {
+						$distance = abs( $pc[1] - $at );
+						if ( $distance <= 120 && ( null === $best || $distance < $best[1] ) ) {
+							$best = array( $pc[0], $distance );
+						}
+					}
+					if ( null !== $best ) {
+						$beside[] = $best[0];
+					}
+				}
+				if ( ! empty( $beside ) && ! array_intersect( $beside, $postcodes ) ) {
+					$this->add(
+						'FACT-010',
+						'review',
+						'medium',
+						$this->node_base( $node, "['telephone']" ) + array(
+							'property'   => 'telephone',
+							'observed'   => $phone . ' for ' . implode( ', ', $postcodes ),
+							'comparison' => 'The page prints this number next to ' . implode( ', ', array_unique( $beside ) ),
+						)
+					);
+				}
+			}
+		}
+
+		// REL-006: an office (postcode with a phone beside it) no business declares.
+		if ( $has_biz ) {
+			$reported = array();
+			foreach ( $offsets as $pc ) {
+				if ( isset( $declared[ $pc[0] ] ) || isset( $reported[ $pc[0] ] ) ) {
+					continue;
+				}
+				$window = substr( $this->facts->text, max( 0, $pc[1] - 20 ), 140 );
+				if ( preg_match( '/\+?\(?\d[\d\s().\-\/]{7,}\d/', $window, $m ) && '' !== PageFacts::phone_nsn( $m[0] ) ) {
+					$reported[ $pc[0] ] = true;
+					$this->add(
+						'REL-006',
+						'review',
+						'low',
+						array(
+							'entity'   => 'office:' . $pc[0],
+							'property' => 'address',
+							'observed' => $pc[0] . ' (with a phone number beside it on the page)',
+						)
+					);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Names, legal names and company numbers against the page (FACT-009,
+	 * FACT-011, FACT-012).
+	 */
+	private function identity_fact_rules() {
+		foreach ( $this->graph->nodes as $node ) {
+			if ( $node['is_ref'] || ! Vocabulary::is_a( $node['types'], 'WebSite' ) || ! isset( $node['props']['name'] ) || ! is_string( $node['props']['name'] ) ) {
+				continue;
+			}
+			// Corroborate against the body only: a stale site title is repeated
+			// in <title> and og:site_name, so those would agree with it.
+			if ( '' !== trim( $node['props']['name'] ) && ! $this->facts->has_name( $node['props']['name'], true ) ) {
+				$this->add( 'FACT-009', 'review', 'medium', $this->node_base( $node, "['name']" ) + array( 'property' => 'name', 'observed' => $node['props']['name'], 'comparison' => 'Not found in the page body (title and meta tags are not counted).' ) );
+			}
+		}
+		$done = array();
+		foreach ( $this->graph->nodes as $node ) {
+			if ( $node['is_ref'] || ! Vocabulary::is_business( $this->graph->all_types( $node ) ) ) {
+				continue;
+			}
+			$key = '' !== $node['id'] ? $node['id'] : 'k' . $node['key'];
+			if ( isset( $done[ $key ] ) ) {
+				continue;
+			}
+			$done[ $key ] = true;
+			$merged       = $this->merged_props( $node );
+			if ( isset( $merged['legalName'] ) && is_string( $merged['legalName'] ) && ! preg_match( '/\b' . self::LEGAL_FORMS . '\s*$/i', trim( $merged['legalName'] ) ) ) {
+				$stem = trim( (string) preg_replace( '/[\s,]+(solicitors|lawyers|legal|law|& co\.?|and co\.?)$/i', '', trim( $merged['legalName'] ) ) );
+				$parts = array();
+				foreach ( preg_split( '/\s+/', $stem ) as $token ) {
+					$parts[] = ( '&' === $token || 0 === strcasecmp( 'and', $token ) ) ? '(?:&|and)' : preg_quote( $token, '/' );
+				}
+				if ( '' !== $stem && preg_match( '/(?<![\p{L}\p{N}])' . implode( '\s*', $parts ) . '[\s,]+' . self::LEGAL_FORMS . '(?![\p{L}\p{N}])/iu', $this->facts->text, $m ) ) {
+					$this->add( 'FACT-011', 'review', 'medium', $this->node_base( $node, "['legalName']" ) + array( 'property' => 'legalName', 'observed' => $merged['legalName'], 'comparison' => 'The page names "' . $m[0] . '"' ) );
+				}
+			}
+			foreach ( $this->company_numbers( $merged ) as $number ) {
+				if ( false === stripos( preg_replace( '/\s+/', '', $this->facts->text ), $number ) ) {
+					$this->add( 'FACT-012', 'review', 'medium', $this->node_base( $node, "['identifier']" ) + array( 'property' => 'identifier', 'observed' => $number, 'comparison' => 'Not shown in the page text.' ) );
+				}
+			}
+		}
+	}
+
+	/**
+	 * UK company numbers an entity claims: identifier values and Companies
+	 * House links in sameAs or url.
+	 *
+	 * @param array $props Merged properties.
+	 * @return array
+	 */
+	private function company_numbers( array $props ) {
+		$candidates = array();
+		if ( isset( $props['identifier'] ) ) {
+			foreach ( Graph::is_list( $props['identifier'] ) ? $props['identifier'] : array( $props['identifier'] ) as $id ) {
+				if ( is_string( $id ) ) {
+					$candidates[] = $id;
+				} elseif ( is_array( $id ) && isset( $id['value'] ) && is_scalar( $id['value'] ) ) {
+					$candidates[] = (string) $id['value'];
+				}
+			}
+		}
+		foreach ( array( 'sameAs', 'url' ) as $prop ) {
+			foreach ( self::prop_values( $props, $prop ) as $url ) {
+				if ( preg_match( '#company-information\.service\.gov\.uk/company/([A-Z0-9]{8})#i', $url, $m ) ) {
+					$candidates[] = $m[1];
+				}
+			}
+		}
+		$out = array();
+		foreach ( $candidates as $candidate ) {
+			$candidate = strtoupper( (string) preg_replace( '/\s+/', '', $candidate ) );
+			if ( preg_match( '/^(?:SC|NI|OC|SO|NC|SL|LP|SE|FC|SF|R0)?\d{6,8}$/', $candidate ) ) {
+				$out[ $candidate ] = true;
+			}
+		}
+		return array_keys( $out );
+	}
+
+	/**
+	 * Structure and vocabulary (SYN-008 to SYN-011).
+	 */
+	private function structure_rules() {
+		$business_names = array();
+		foreach ( $this->primary_businesses() as $node ) {
+			$merged = $this->merged_props( $node );
+			// The brand is the first two words of the firm's name, so a place
+			// called "Firm Town" matches "Firm Personal Injury Solicitors".
+			$words = isset( $merged['name'] ) && is_string( $merged['name'] ) ? preg_split( '/\s+/', trim( $merged['name'] ) ) : array();
+			$brand = PageFacts::compact( implode( ' ', array_slice( $words, 0, 2 ) ) );
+			if ( strlen( $brand ) >= 6 ) {
+				$business_names[] = $brand;
+			}
+		}
+		$known = array_flip( self::KNOWN_PROPERTIES );
+		foreach ( $this->graph->nodes as $node ) {
+			if ( $node['is_ref'] ) {
+				continue;
+			}
+			$types = $this->graph->all_types( $node );
+			$props = $node['props'];
+
+			// SYN-008: a branch office modelled as a place.
+			if ( Vocabulary::is_a( $types, 'Place' ) && ! Vocabulary::is_business( $types ) && ! Vocabulary::is_a( $types, 'PostalAddress' ) ) {
+				$business_only = array_values( array_intersect( array_keys( $props ), array( 'priceRange', 'email', 'openingHours', 'openingHoursSpecification', 'aggregateRating', 'review', 'legalName', 'founder', 'employee', 'contactPoint' ) ) );
+				$name          = isset( $props['name'] ) && is_string( $props['name'] ) ? PageFacts::compact( $props['name'] ) : '';
+				$named         = false;
+				foreach ( $business_names as $business ) {
+					$named = $named || ( '' !== $name && false !== strpos( $name, $business ) );
+				}
+				if ( ! empty( $business_only ) || ( $named && ( isset( $props['telephone'] ) || isset( $props['address'] ) ) ) ) {
+					$this->add( 'SYN-008', 'review', 'high', $this->node_base( $node ) + array( 'observed' => implode( ', ', $types ) . ( isset( $props['name'] ) && is_string( $props['name'] ) ? ' named ' . $props['name'] : '' ), 'comparison' => empty( $business_only ) ? 'Carries a business name with a telephone or address.' : 'Carries business properties: ' . implode( ', ', $business_only ) ) );
+				}
+			}
+
+			// SYN-009: a property name one or two letters from a known one.
+			foreach ( array_keys( $props ) as $prop ) {
+				if ( ! is_string( $prop ) || '' === $prop || '@' === $prop[0] || isset( $known[ $prop ] ) || strlen( $prop ) < 5 ) {
+					continue;
+				}
+				$best = '';
+				foreach ( self::KNOWN_PROPERTIES as $candidate ) {
+					$distance = levenshtein( strtolower( $prop ), strtolower( $candidate ) );
+					if ( $distance > 0 && $distance <= ( strlen( $prop ) >= 8 ? 2 : 1 ) ) {
+						$best = $candidate;
+						break;
+					}
+				}
+				if ( '' !== $best ) {
+					$this->add( 'SYN-009', 'review', 'medium', $this->node_base( $node, "['" . $prop . "']" ) + array( 'property' => $prop, 'observed' => $prop, 'comparison' => 'Did you mean ' . $best . '?' ) );
+				}
+			}
+
+			// SYN-010: a typed entity with nothing in it.
+			$content = $props;
+			unset( $content['@type'], $content['@id'], $content['@context'] );
+			if ( ! empty( $node['types'] ) && '' === $node['id'] && empty( $content ) ) {
+				$this->add( 'SYN-010', 'review', 'high', $this->node_base( $node ) + array( 'observed' => '{"@type": "' . implode( '", "', $node['types'] ) . '"}' ) );
+			}
+
+			// SYN-011: provider on a business, hasPart pointing at a business.
+			if ( isset( $props['provider'] ) && Vocabulary::is_business( $types ) && ! Vocabulary::is_a( $types, 'Service' ) ) {
+				$this->add( 'SYN-011', 'review', 'high', $this->node_base( $node, "['provider']" ) + array( 'property' => 'provider', 'observed' => 'provider on ' . implode( ', ', $types ), 'comparison' => 'provider belongs to Service and CreativeWork, not to an organisation.' ) );
+			}
+			if ( isset( $props['hasPart'] ) && Vocabulary::is_a( $types, 'CreativeWork' ) ) {
+				foreach ( $this->graph->resolve( $props['hasPart'] ) as $part ) {
+					$part_types = $this->graph->all_types( $part );
+					if ( Vocabulary::is_business( $part_types ) || ( Vocabulary::is_a( $part_types, 'Place' ) && ! Vocabulary::is_a( $part_types, 'CreativeWork' ) ) ) {
+						$this->add( 'SYN-011', 'review', 'high', $this->node_base( $node, "['hasPart']" ) + array( 'property' => 'hasPart', 'observed' => 'hasPart points at ' . ( '' !== $part['id'] ? $part['id'] : implode( ', ', $part_types ) ), 'comparison' => 'hasPart expects a CreativeWork.' ) );
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Relevance and URL consistency (REL-003 to REL-005, URL-006, URL-007,
+	 * FEAT-008).
+	 *
+	 * @param array $extraction Extraction.
+	 */
+	private function relevance_rules( array $extraction ) {
+		$places = strtolower( $this->facts->text );
+		foreach ( $this->graph->nodes as $node ) {
+			if ( $node['is_ref'] ) {
+				continue;
+			}
+			foreach ( array( 'addressLocality', 'addressRegion', 'name' ) as $prop ) {
+				if ( isset( $node['props'][ $prop ] ) && is_string( $node['props'][ $prop ] ) ) {
+					$places .= ' ' . strtolower( $node['props'][ $prop ] );
+				}
+			}
+		}
+		$meta = strtolower( isset( $extraction['meta_description'] ) ? (string) $extraction['meta_description'] : '' );
+		foreach ( $this->primary_businesses() as $node ) {
+			$merged = $this->merged_props( $node );
+
+			// REL-003: the description names a place the site never mentions.
+			if ( isset( $merged['description'] ) && is_string( $merged['description'] ) && preg_match_all( '/\b(?:in|across|throughout|serving|covering|near|around)\s+([A-Z][a-z]{2,}(?:[\s\-](?:upon|on|under|[A-Z][a-z]+))*)/', $merged['description'], $m ) ) {
+				foreach ( array_unique( $m[1] ) as $place ) {
+					$needle = strtolower( $place );
+					if ( false === strpos( $places, $needle ) && false === strpos( $meta, $needle ) ) {
+						$this->add( 'REL-003', 'review', 'medium', $this->node_base( $node, "['description']" ) + array( 'property' => 'description', 'observed' => $place, 'comparison' => 'Not in any address, place name or the page text.', 'snippet' => $merged['description'] ) );
+						break;
+					}
+				}
+			}
+
+			// URL-006: url names a different page from mainEntityOfPage.
+			$url  = isset( $merged['url'] ) && is_string( $merged['url'] ) ? trim( $merged['url'] ) : '';
+			$main = isset( $merged['mainEntityOfPage'] ) ? $merged['mainEntityOfPage'] : '';
+			$main = is_array( $main ) && isset( $main['@id'] ) && is_string( $main['@id'] ) ? $main['@id'] : ( is_string( $main ) ? trim( $main ) : '' );
+			$path = (string) parse_url( $url, PHP_URL_PATH ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+			if ( '' !== $url && '' !== $main && '' !== trim( $path, '/' ) && self::url_key( $url ) !== self::url_key( $main ) && self::url_key( $main ) === self::url_key( $this->ctx['page_url'] ) && $this->is_own_host( strtolower( (string) parse_url( $url, PHP_URL_HOST ) ) ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+				$this->add( 'URL-006', 'review', 'high', $this->node_base( $node, "['url']" ) + array( 'property' => 'url', 'observed' => $url, 'comparison' => 'mainEntityOfPage: ' . $main ) );
+			}
+
+			// FEAT-008: review items collected by another site.
+			if ( ! empty( $merged['review'] ) && is_array( $merged['review'] ) ) {
+				$own = isset( $merged['name'] ) && is_string( $merged['name'] ) ? PageFacts::compact( $merged['name'] ) : '';
+				foreach ( Graph::is_list( $merged['review'] ) ? $merged['review'] : array( $merged['review'] ) as $review ) {
+					$review    = is_array( $review ) ? $this->deref( $review ) : array();
+					$publisher = isset( $review['publisher'] ) ? $review['publisher'] : null;
+					$publisher = is_array( $publisher ) ? $this->deref( $publisher ) : $publisher;
+					$name      = is_string( $publisher ) ? $publisher : ( is_array( $publisher ) && isset( $publisher['name'] ) && is_string( $publisher['name'] ) ? $publisher['name'] : '' );
+					if ( '' !== $name && ( '' === $own || false === strpos( PageFacts::compact( $name ), $own ) ) ) {
+						$this->add( 'FEAT-008', 'review', 'high', $this->node_base( $node, "['review']" ) + array( 'property' => 'review', 'observed' => 'Review publisher: ' . $name, 'comparison' => 'The reviews were collected by another site, not by this business.' ) );
+						break;
+					}
+				}
+			}
+		}
+
+		$pages = array();
+		foreach ( $this->graph->nodes as $node ) {
+			if ( $node['is_ref'] ) {
+				continue;
+			}
+			$types = $this->graph->all_types( $node );
+
+			// REL-004: a registrar given as a membership.
+			if ( isset( $node['props']['memberOf'] ) ) {
+				foreach ( Graph::is_list( $node['props']['memberOf'] ) ? $node['props']['memberOf'] : array( $node['props']['memberOf'] ) as $member ) {
+					$name = is_string( $member ) ? $member : ( is_array( $member ) && isset( $member['name'] ) && is_string( $member['name'] ) ? $member['name'] : '' );
+					if ( preg_match( '/companies house|registrar of companies|companies registry/i', $name ) ) {
+						$this->add( 'REL-004', 'review', 'high', $this->node_base( $node, "['memberOf']" ) + array( 'property' => 'memberOf', 'observed' => $name, 'comparison' => 'A registrar is not a membership body; use identifier or sameAs for the registration.' ) );
+					}
+				}
+			}
+
+			// REL-005: one url described by several WebPage or WebSite entities.
+			foreach ( array( 'WebPage', 'WebSite' ) as $kind ) {
+				if ( Vocabulary::is_a( $types, $kind ) && isset( $node['props']['url'] ) && is_string( $node['props']['url'] ) ) {
+					$entity = '' !== $node['id'] ? $node['id'] : 'k' . $node['key'];
+					$pages[ $kind ][ self::url_key( $node['props']['url'] ) ][ $entity ] = $node;
+				}
+			}
+
+			// URL-007: an image path that a cache or CDN will rotate.
+			foreach ( array( 'image', 'logo', 'contentUrl', 'thumbnailUrl' ) as $prop ) {
+				foreach ( self::prop_values( $node['props'], $prop ) as $value ) {
+					$host = strtolower( (string) parse_url( $value, PHP_URL_HOST ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+					if ( preg_match( '/(^|\.)nitrocdn\.com$/', $host ) || preg_match( '#/rev-[0-9a-f]{5,}/#i', $value ) ) {
+						$this->add( 'URL-007', 'review', 'medium', $this->node_base( $node, "['" . $prop . "']" ) + array( 'property' => $prop, 'observed' => $value, 'comparison' => 'Reference the original file on this site instead.' ) );
+					}
+				}
+			}
+		}
+		foreach ( $pages as $kind => $by_url ) {
+			foreach ( $by_url as $url => $entities ) {
+				if ( count( $entities ) < 2 ) {
+					continue;
+				}
+				$labels = array_map( array( __CLASS__, 'entity_label' ), array_keys( $entities ) );
+				$nodes  = array_values( $entities );
+				$this->add( 'REL-005', 'review', 'high', $this->node_base( $nodes[1] ) + array( 'property' => 'url', 'observed' => $kind . ' entities for ' . $url . ': ' . implode( '; ', $labels ), 'comparison' => 'Different identifiers stop them merging into one description.' ) );
+			}
+		}
+	}
+
+	/**
+	 * Comparable values of a property that can hold an object: logo by URL,
+	 * aggregateRating by value and count, itemListElement as canonical JSON.
+	 *
+	 * @param array  $props Properties.
+	 * @param string $prop  Property.
+	 * @return array
+	 */
+	private function complex_values( array $props, $prop ) {
+		if ( ! isset( $props[ $prop ] ) ) {
+			return array();
+		}
+		$value = $props[ $prop ];
+		if ( 'logo' === $prop ) {
+			$out = array();
+			foreach ( Graph::is_list( $value ) ? $value : array( $value ) as $item ) {
+				$url = $this->image_url( $item );
+				if ( '' !== $url ) {
+					$out[] = self::url_key( $url );
+				}
+			}
+			return array_values( array_unique( $out ) );
+		}
+		if ( 'aggregateRating' === $prop ) {
+			$rating = Graph::is_list( $value ) ? ( isset( $value[0] ) ? $value[0] : null ) : $value;
+			if ( ! is_array( $rating ) ) {
+				return array();
+			}
+			$rating = $this->deref( $rating );
+			$score  = isset( $rating['ratingValue'] ) ? self::number_text( $rating['ratingValue'] ) : '';
+			$count  = isset( $rating['reviewCount'] ) ? self::number_text( $rating['reviewCount'] ) : ( isset( $rating['ratingCount'] ) ? self::number_text( $rating['ratingCount'] ) : '' );
+			return '' === $score && '' === $count ? array() : array( $score . ' from ' . $count );
+		}
+		if ( 'itemListElement' === $prop && is_array( $value ) ) {
+			return array( Extractor::canonical_json( $value ) );
+		}
+		return array();
+	}
+
+	/**
+	 * A number written as text or as a number, in one form.
+	 *
+	 * @param mixed $value Value.
+	 * @return string
+	 */
+	private static function number_text( $value ) {
+		if ( is_string( $value ) ) {
+			$value = trim( $value );
+		}
+		return is_numeric( $value ) ? (string) ( 0 + $value ) : ( is_scalar( $value ) ? (string) $value : '' );
+	}
+
+	/**
+	 * URL of an image value: a string, an ImageObject, or a reference to one.
+	 *
+	 * @param mixed $value Value.
+	 * @return string
+	 */
+	private function image_url( $value ) {
+		if ( is_string( $value ) ) {
+			return trim( $value );
+		}
+		if ( ! is_array( $value ) ) {
+			return '';
+		}
+		$value = $this->deref( $value );
+		foreach ( array( 'url', 'contentUrl' ) as $prop ) {
+			if ( isset( $value[ $prop ] ) && is_string( $value[ $prop ] ) ) {
+				return trim( $value[ $prop ] );
+			}
+		}
+		return isset( $value['@id'] ) && is_string( $value['@id'] ) ? $value['@id'] : '';
+	}
+
+	/**
 	 * Facts kept per page for site-wide rules: business entities by @id and
 	 * own-host resources cited as images or logos.
 	 *
@@ -541,6 +1200,8 @@ class Evaluator {
 	private function site_facts() {
 		$entities  = array();
 		$resources = array();
+		$ids       = array();
+		$named     = array();
 		foreach ( $this->graph->nodes as $node ) {
 			if ( $node['is_ref'] ) {
 				continue;
@@ -552,6 +1213,9 @@ class Evaluator {
 					'name'      => isset( $node['props']['name'] ) && is_string( $node['props']['name'] ) ? $node['props']['name'] : '',
 					'phones'    => array_values( array_filter( array_map( array( PageFacts::class, 'phone_nsn' ), self::prop_values( $node['props'], 'telephone' ) ) ) ),
 					'postcodes' => array(),
+					'logo'      => $this->complex_values( $node['props'], 'logo' ),
+					'rating'    => $this->complex_values( $node['props'], 'aggregateRating' ),
+					'links'     => self::referenced_ids( $node['props'] ),
 					'path'      => $node['path'],
 					'block'     => $node['block'],
 				);
@@ -563,7 +1227,21 @@ class Evaluator {
 				}
 				$entities[ $node['id'] ][] = $entry;
 			}
-			foreach ( array( 'image', 'logo', 'contentUrl', 'thumbnailUrl' ) as $prop ) {
+			if ( '' !== $node['id'] ) {
+				$ids[ $node['id'] ] = true;
+				foreach ( array( 'WebSite', 'WebPage' ) as $kind ) {
+					if ( Vocabulary::is_a( $types, $kind ) ) {
+						$named[ $node['id'] ][] = array(
+							'kind'  => $kind,
+							'name'  => isset( $node['props']['name'] ) && is_string( $node['props']['name'] ) ? $node['props']['name'] : '',
+							'url'   => isset( $node['props']['url'] ) && is_string( $node['props']['url'] ) ? self::url_key( $node['props']['url'] ) : '',
+							'path'  => $node['path'],
+							'block' => $node['block'],
+						);
+					}
+				}
+			}
+			foreach ( array( 'image', 'logo', 'contentUrl', 'thumbnailUrl', 'sameAs' ) as $prop ) {
 				if ( ! isset( $node['props'][ $prop ] ) ) {
 					continue;
 				}
@@ -584,6 +1262,9 @@ class Evaluator {
 		return array(
 			'entities'  => $entities,
 			'resources' => $resources,
+			'ids'       => array_keys( $ids ),
+			'refs'      => $this->refs,
+			'named'     => $named,
 		);
 	}
 

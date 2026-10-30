@@ -1,0 +1,5 @@
+{"id":"FP11","kind":"must_not_flag","category":"identity","summary":"External URLs on nested entities and in sameAs.",
+"site":"https://example-legal.example",
+"pages":[{"path":"/","body":"<p>Example Legal Firm</p>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","@id":"https://example-legal.example/#organization","name":"Example Legal Firm","url":"https://example-legal.example/","memberOf":{"@type":"Organization","name":"Law Society of Scotland","url":"https://www.lawscot.org.uk/"},"sameAs":["https://find-and-update.company-information.service.gov.uk/company/ZZ123456"]}]}],
+"expect":{"clean":true}}

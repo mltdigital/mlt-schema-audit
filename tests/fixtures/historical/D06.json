@@ -1,0 +1,7 @@
+{"id":"D06","kind":"defect","category":"consistency","summary":"Three unlinked business nodes with the same name and no @id; two different phones.",
+"site":"https://www.calderwynd.example",
+"pages":[{"path":"/","body":"<p>Calder Wynd Solicitors, 27 Rose Street, Edinburgh EH2 9ZA</p>",
+"blocks":[[{"@context":"http://schema.org","@type":"Organization","name":"Calder Wynd Solicitors","url":"http://calderwynd.example","contactPoint":[{"@type":"ContactPoint","telephone":"01632 960 675","contactType":"customer service"}]}],
+{"@context":"https://schema.org","@type":"Organization","name":"Calder Wynd Solicitors","url":"https://www.calderwynd.example"},
+{"@context":"http://schema.org","@type":"LegalService","name":"Calder Wynd Solicitors","url":"https://www.calderwynd.example/","telephone":"+44-1632-960-280"}]}],
+"expect":{"fires":["ID-005","FACT-001"],"no_fail":true}}

@@ -1,0 +1,5 @@
+{"id":"FP17","kind":"must_not_flag","category":"syntax","summary":"dayOfWeek given as full schema.org URLs.",
+"site":"https://bramble-legal.example",
+"pages":[{"path":"/","body":"<p>Bramble Legal</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","name":"Bramble Legal","openingHoursSpecification":[{"@type":"OpeningHoursSpecification","dayOfWeek":["https://schema.org/Monday","https://schema.org/Friday"],"opens":"09:00","closes":"17:00"}]}]}],
+"expect":{"clean":true,"allow":["FEAT-007"]}}

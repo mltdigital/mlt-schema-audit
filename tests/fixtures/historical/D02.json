@@ -1,0 +1,7 @@
+{"id":"D02","kind":"defect","category":"consistency","summary":"One firm declared under three unlinked @ids with the same address and phone.",
+"site":"https://www.kestrelmoray.example",
+"pages":[{"path":"/","body":"<p>Kestrel Moray LLP, 12 Quarry Lane, Aberdeen AB10 9QX. <a href=\"tel:01632456789\">01632 456 789</a></p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://www.kestrelmoray.example/#organization","name":"kestrelmoray LLP","url":"https://www.kestrelmoray.example/"},{"@type":["LegalService","LocalBusiness"],"@id":"https://www.kestrelmoray.example/#kestrelmoray","name":"kestrelmoray LLP","telephone":"+44-1632-456-789","address":{"@type":"PostalAddress","streetAddress":"12 Quarry Lane","addressLocality":"Aberdeen","postalCode":"AB10 9QX","addressCountry":"GB"}}]}]},
+{"path":"/family-law/","body":"<p>Kestrel Moray LLP, 12 Quarry Lane, Aberdeen AB10 9QX. <a href=\"tel:01632456789\">01632 456 789</a></p>",
+"blocks":[{"@context":"https://schema.org","@type":["LegalService","LocalBusiness"],"@id":"https://www.kestrelmoray.example/#business","name":"Kestrel Moray LLP","telephone":"+44-1632-456-789","address":{"@type":"PostalAddress","streetAddress":"12 Quarry Lane","addressLocality":"Aberdeen","postalCode":"AB10 9QX","addressCountry":"GB"}}]}],
+"expect":{"fires_any":["ID-005","SITE-002"],"no_fail":true}}

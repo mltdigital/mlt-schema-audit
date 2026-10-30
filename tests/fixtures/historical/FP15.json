@@ -1,0 +1,5 @@
+{"id":"FP15","kind":"must_not_flag","category":"facts","summary":"JSON & versus HTML &amp;; legalName with its suffix matches the page.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<footer><p>&copy; Ridley &amp; Gask LLP. Solicitors and Estate Agents.</p></footer>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","@id":"https://ridleygask.example/#organization","name":"Ridley & Gask","legalName":"Ridley & Gask LLP"}]}],
+"expect":{"clean":true}}

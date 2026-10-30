@@ -1,0 +1,5 @@
+{"id":"D15","kind":"defect","category":"relevance","summary":"Business node url names a different page from its mainEntityOfPage (block copied between pages).",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/road-traffic-accidents/","body":"<p>Corrie Ashford Personal Injury Solicitors</p>",
+"blocks":[{"@context":"http://schema.org","@type":"LegalService","name":"Corrie Ashford Personal Injury Solicitors","url":"https://www.corrieashford.example/accident-injury-at-work-claims/","mainEntityOfPage":"https://www.corrieashford.example/road-traffic-accidents/"}]}],
+"expect":{"fires":["URL-006"],"no_fail":true}}

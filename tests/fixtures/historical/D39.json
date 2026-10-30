@@ -1,0 +1,5 @@
+{"id":"D39","kind":"defect","category":"facts","summary":"Schema telephone not rendered anywhere; a near-match is published (likely transposition).",
+"site":"https://www.brackenridge.example",
+"pages":[{"path":"/commercial/","body":"<header><a href=\"tel:01632960456\">01632 960 456</a></header><footer><p>Tontine Court, 8 Gordon Lane, Glasgow G1 9PL. Tel 01632 960 456</p></footer>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","name":"Brackenridge Tolmie Solicitors","url":"https://www.brackenridge.example/commercial/","telephone":"+44 1632 960 434","address":{"@type":"PostalAddress","streetAddress":"Tontine Court, 8 Gordon Lane","addressLocality":"Glasgow","postalCode":"G1 9PL","addressCountry":"GB"}}]}],
+"expect":{"fires":["FACT-001"],"no_fail":true}}

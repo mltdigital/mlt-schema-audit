@@ -1,0 +1,5 @@
+{"id":"D30","kind":"defect","category":"facts","summary":"A real phone number attached to the wrong office: the page shows it beside another office's address.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<div class=\"branch\"><h3>Portlarch</h3><p>51 Harbour Street, Portlarch KA91 5DX</p><a href=\"tel:01632 960341\">01632 960341</a></div><div class=\"branch\"><h3>Glenmuir</h3><p>22 Bank Street, Glenmuir KA92 0AG</p><a href=\"tel:01632 960306\">01632 960306</a></div>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","name":"Ridley & Gask","telephone":"01632 960306","address":{"@type":"PostalAddress","streetAddress":"51 Harbour Street","addressLocality":"Portlarch","postalCode":"KA91 5DX","addressCountry":"GB"}}]}],
+"expect":{"fires":["FACT-010"],"no_fail":true}}

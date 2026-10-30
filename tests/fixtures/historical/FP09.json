@@ -1,0 +1,5 @@
+{"id":"FP09","kind":"must_not_flag","category":"consistency","summary":"Same phone and address on an Organization and its linked branch node.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask LLP. Ridley &amp; Gask Portlarch, 51 Harbour Street, Portlarch KA91 5DX</p><a href=\"tel:01632 960341\">01632 960341</a>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://ridleygask.example/#organization","name":"Ridley & Gask","legalName":"Ridley & Gask LLP","telephone":"+441632960341","address":{"@type":"PostalAddress","streetAddress":"51 Harbour Street","addressLocality":"Portlarch","postalCode":"KA91 5DX","addressCountry":"GB"},"department":[{"@id":"https://ridleygask.example/#office-portlarch"}]},{"@type":"LegalService","@id":"https://ridleygask.example/#office-portlarch","name":"Ridley & Gask Portlarch","parentOrganization":{"@id":"https://ridleygask.example/#organization"},"telephone":"+441632960341","address":{"@type":"PostalAddress","streetAddress":"51 Harbour Street","addressLocality":"Portlarch","postalCode":"KA91 5DX","addressCountry":"GB"}}]}]}],
+"expect":{"clean":true}}

@@ -1,0 +1,6 @@
+{"id":"FP01","kind":"must_not_flag","category":"facts","summary":"Genuine phone that looks like a placeholder, corroborated by a tel: link and footer text; the meta description names another number.",
+"site":"https://www.kestrelmoray.example",
+"pages":[{"path":"/","head":"<meta name=\"description\" content=\"For expert conveyancing advice in Aberdeen or the surrounding areas, please call kestrelmoray on 01632 960 244.\">",
+"body":"<header><a href=\"tel:01632456789\">01632 456 789</a></header><h1>Kestrel Moray LLP</h1><p>12 Quarry Lane, Aberdeen AB10 9QX</p><footer><p>PHONE: 01632 456 789</p></footer>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://www.kestrelmoray.example/","url":"https://www.kestrelmoray.example/","description":"For expert conveyancing advice in Aberdeen or the surrounding areas, please call kestrelmoray on 01632 960 244."},{"@type":["LegalService","LocalBusiness"],"@id":"https://www.kestrelmoray.example/#kestrelmoray","name":"kestrelmoray LLP","telephone":"+44-1632-456-789","contactPoint":{"@type":"ContactPoint","contactType":"Customer service","telephone":"+44-1632-456-789"},"address":{"@type":"PostalAddress","streetAddress":"12 Quarry Lane","addressLocality":"Aberdeen","postalCode":"AB10 9QX","addressCountry":"GB"}}]}]}],
+"expect":{"clean":true}}

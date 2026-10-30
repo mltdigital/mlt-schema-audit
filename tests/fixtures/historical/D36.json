@@ -1,0 +1,5 @@
+{"id":"D36","kind":"defect","category":"syntax","summary":"provider used on a LegalService; hasPart on a WebPage points at a business. areaServed Country is valid and not flagged.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask Solicitors - Portlarch Office</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":["LegalService","LocalBusiness"],"@id":"https://www.ridleygask.example/#portlarch-office","name":"Ridley & Gask Solicitors - Portlarch Office","provider":{"@id":"https://www.ridleygask.example/#legalservice"},"areaServed":{"@type":"Country","name":"Scotland"}},{"@type":"WebPage","@id":"https://www.ridleygask.example/#webpage","url":"https://www.ridleygask.example/","hasPart":[{"@id":"https://www.ridleygask.example/#portlarch-office"}]}]}]}],
+"expect":{"fires":["SYN-011"],"min_count":{"SYN-011":2},"absent":["SYN-008"],"no_fail":true}}

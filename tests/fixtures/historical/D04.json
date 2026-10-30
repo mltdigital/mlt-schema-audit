@@ -1,0 +1,6 @@
+{"id":"D04","kind":"defect","category":"identity","summary":"Business description copied from another firm: names a place (York) the site never mentions.",
+"site":"https://www.calderwynd.example",
+"pages":[{"path":"/","head":"<meta name=\"description\" content=\"Serving the Highlands for over 10 years, Calder Wynd Solicitors offers expert family and employment law services.\">",
+"body":"<p>Calder Wynd Solicitors, 27 Rose Street, Edinburgh EH2 9ZA. Unit 5 Dornoch Business Park, IV25 9ZB.</p>",
+"blocks":[{"@context":"http://schema.org","@type":"LegalService","name":"Calder Wynd Solicitors","legalName":"Calder Wynd Solicitors Limited","description":"25 years of proven expertise in employment law and HR advice. Our employment law specialists in York offer quality, cost effective fixed price support.","address":{"@type":"PostalAddress","streetAddress":"27 Rose Street","addressLocality":"Edinburgh","addressRegion":"Midlothian","postalCode":"EH2 9ZA","addressCountry":"GB"}}]}],
+"expect":{"fires":["REL-003"],"no_fail":true}}

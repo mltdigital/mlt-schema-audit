@@ -1,0 +1,5 @@
+{"id":"D05","kind":"defect","category":"features","summary":"Self-serving aggregateRating with numeric values; http://schema.org context tolerated.",
+"site":"https://www.calderwynd.example",
+"pages":[{"path":"/","body":"<p>Calder Wynd Solicitors</p>",
+"blocks":[{"@context":"http://schema.org","@type":"LegalService","name":"Calder Wynd Solicitors","url":"https://www.calderwynd.example/","aggregateRating":{"@type":"AggregateRating","ratingValue":4.2,"reviewCount":15,"bestRating":5,"worstRating":1}}]}],
+"expect":{"fires":["FEAT-001"],"absent":["SYN-005","FEAT-004"],"no_fail":true}}

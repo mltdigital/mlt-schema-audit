@@ -1,0 +1,5 @@
+{"id":"D25","kind":"defect","category":"features","summary":"Homepage FAQPage whose question text is not on the page.",
+"site":"https://www.marlowfenwick.example",
+"pages":[{"path":"/","body":"<h1>Specialist Driving and Traffic Offence Solicitors</h1><p>No question text from the FAQPage appears in the visible content.</p>",
+"blocks":[{"@context":"https://schema.org","@type":"FAQPage","@id":"https://www.marlowfenwick.example/#faq","mainEntity":[{"@type":"Question","name":"Can I get legal aid for a driving offence?","acceptedAnswer":{"@type":"Answer","text":"Example answer."}}]}]}],
+"expect":{"fires":["FEAT-003"],"absent":["FEAT-002"],"no_fail":true}}

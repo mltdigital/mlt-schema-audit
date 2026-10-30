@@ -1,0 +1,6 @@
+{"id":"D44","kind":"defect","category":"urls","summary":"Founder sameAs page on the firm's own site returns 404; the third-party profile is off-host and not checked.",
+"site":"https://www.brackenridge.example",
+"pages":[{"path":"/","body":"<p>Brackenridge Tolmie Solicitors Limited</p>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","@id":"https://www.brackenridge.example/#organization","name":"Brackenridge Tolmie Solicitors Limited","sameAs":["https://x.com/brackenridgetolmie"],"founder":[{"@type":"Person","name":"Person A","sameAs":["https://www.brackenridge.example/person/person-a/"]}]}]}],
+"resources":{"https://www.brackenridge.example/person/person-a/":404},
+"expect":{"fires":["URL-004"]},"note":"The x.com 404 is outside v1 scope: requests go to the site's own host only (contract section 4)."}

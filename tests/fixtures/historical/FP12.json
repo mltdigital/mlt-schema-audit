@@ -1,0 +1,5 @@
+{"id":"FP12","kind":"must_not_flag","category":"facts","summary":"Dialling code that does not match the office town, published exactly so on the page.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<div class=\"branch\"><h3>Ridley &amp; Gask Easthaven</h3><p>84 Main Street, Easthaven KA93 8AN</p><a href=\"tel:01632 960506\">01632 960506</a></div>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://ridleygask.example/#office-easthaven","name":"Ridley & Gask Easthaven","url":"https://ridleygask.example/","telephone":"+441632960506","address":{"@type":"PostalAddress","streetAddress":"84 Main Street","addressLocality":"Easthaven","postalCode":"KA93 8AN","addressCountry":"GB"}}]}],
+"expect":{"clean":true}}

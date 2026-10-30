@@ -1,0 +1,5 @@
+{"id":"D29","kind":"defect","category":"identity","summary":"Another company's registry identity (number, founding date and place) published on the firm's Organization.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<footer><p>Ridley &amp; Gask LLP, 51 Harbour Street, Portlarch KA91 5DX</p></footer>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","name":"Ridley & Gask","legalName":"Ridley & Gask Solicitors","identifier":{"@type":"PropertyValue","propertyID":"Companies House","value":"SC900001"},"foundingDate":"2012-05-02","foundingLocation":{"@type":"Place","name":"Seamill"},"sameAs":["https://find-and-update.company-information.service.gov.uk/company/SC900001"],"address":{"@type":"PostalAddress","streetAddress":"51 Harbour Street","addressLocality":"Portlarch","postalCode":"KA91 5DS","addressCountry":"GB"}}]}],
+"expect":{"fires":["FACT-012","FACT-011"]},"note":"With a register lookup this would be a fail; v1 makes no external calls (contract section 10), so the offline review is expected."}

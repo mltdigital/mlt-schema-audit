@@ -1,0 +1,5 @@
+{"id":"D21","kind":"defect","category":"facts","summary":"One street address declared with two postcodes and two phones; a branch modelled as an areaServed Place.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/road-traffic-accidents/","body":"<p>Corrie Ashford Personal Injury Solicitors. 01632 960 214</p>",
+"blocks":[{"@context":"http://schema.org","@type":"LegalService","name":"Corrie Ashford Personal Injury Solicitors","telephone":"+44-1632-960-214","address":{"@type":"PostalAddress","streetAddress":"19 Westport","addressLocality":"Edinburgh","postalCode":"EH3 9ZD","addressCountry":"GB"},"areaServed":[{"@type":"Place","name":"Corrie Ashford Edinburgh","telephone":"+44-808-157-0100","address":{"@type":"PostalAddress","streetAddress":"19 Westport","addressLocality":"Edinburgh","addressRegion":"Midlothian","postalCode":"EH3 9ZN","addressCountry":"GB"}}]}]}],
+"expect":{"fires":["FACT-008","SYN-008"],"no_fail":true}}

@@ -1,0 +1,5 @@
+{"id":"D33","kind":"defect","category":"facts","summary":"legalName is a trading style; the page names the LLP.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<footer><p>Ridley &amp; Gask LLP is registered in Scotland.</p></footer>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","@id":"https://www.ridleygask.example/#organization","name":"Ridley & Gask","legalName":"Ridley & Gask Solicitors"}]}],
+"expect":{"fires":["FACT-011"],"no_fail":true}}

@@ -1,0 +1,5 @@
+{"id":"D24","kind":"defect","category":"features","summary":"Self-serving aggregateRating; quoted numbers are not an error.",
+"site":"https://www.marlowfenwick.example",
+"pages":[{"path":"/","body":"<p>Marlow Fenwick Solicitors</p>",
+"blocks":[{"@context":"https://schema.org","@type":["LegalService","LocalBusiness"],"@id":"https://www.marlowfenwick.example/#legalservice","name":"Marlow Fenwick Solicitors","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.9","reviewCount":"120"}}]}],
+"expect":{"fires":["FEAT-001"],"absent":["FEAT-004"],"no_fail":true}}

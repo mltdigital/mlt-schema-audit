@@ -1,0 +1,5 @@
+{"id":"D13","kind":"defect","category":"syntax","summary":"Misspelt property adressRegion and a URL value with a leading space.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/","body":"<p>Corrie Ashford, 19 Westport, Edinburgh EH3 9ZD</p>",
+"blocks":[{"@context":"http://schema.org","@type":"LegalService","name":"Corrie Ashford","mainEntityOfPage":" https://www.corrieashford.example/","address":{"@type":"PostalAddress","streetAddress":" 19 Westport","addressLocality":"Edinburgh","adressRegion":"Scotland","postalCode":"EH3 9ZD","addressCountry":"GB"}}]}],
+"expect":{"fires":["SYN-009","URL-005"],"no_fail":true}}

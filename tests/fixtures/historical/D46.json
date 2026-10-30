@@ -1,0 +1,6 @@
+{"id":"D46","kind":"defect","category":"consistency","summary":"#website given two names on one page; the homepage is described by two WebPage nodes.",
+"site":"https://www.brackenridge.example",
+"pages":[{"path":"/","body":"<p>Brackenridge Tolmie Solicitors</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://www.brackenridge.example/#website","url":"https://www.brackenridge.example/","name":"Brackenridge + Tolmie Solicitors"},{"@type":"WebPage","@id":"https://www.brackenridge.example/","url":"https://www.brackenridge.example/","name":"Home"}]},
+{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://www.brackenridge.example/#website","url":"https://www.brackenridge.example/","name":"Brackenridge Tolmie Solicitors"},{"@type":"WebPage","@id":"https://www.brackenridge.example/#webpage","url":"https://www.brackenridge.example/","name":"Brackenridge Tolmie Solicitors, Glasgow"}]}]}],
+"expect":{"fires":["ID-001","REL-005"],"no_fail":true}}

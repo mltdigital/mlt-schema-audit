@@ -1,0 +1,7 @@
+{"id":"D35","kind":"defect","category":"consistency","summary":"Three sources: two WebSite, two WebPage and two Organization nodes that cannot merge (www and bare @ids).",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask. <a href=\"tel:01632960341\">01632 960341</a> <a href=\"tel:01632960306\">01632 960306</a></p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://ridleygask.example/#website","url":"https://ridleygask.example/","name":"Coastline Estate Agents"},{"@type":"WebPage","@id":"https://ridleygask.example/","url":"https://ridleygask.example/","isPartOf":{"@id":"https://ridleygask.example/#website"}}]},
+{"@context":"https://schema.org","@type":"Organization","name":"Ridley & Gask","telephone":"01632 960306"},
+{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://www.ridleygask.example/#website","url":"https://www.ridleygask.example/","name":"Ridley & Gask Solicitors"},{"@type":"WebPage","@id":"https://www.ridleygask.example/#webpage","url":"https://www.ridleygask.example/"},{"@type":"Organization","@id":"https://www.ridleygask.example/#organization","name":"Ridley & Gask","contactPoint":{"@type":"ContactPoint","telephone":"01632 960341","contactType":"customer service"}}]}]}],
+"expect":{"fires":["REL-005","ID-005"],"absent":["ID-002"],"no_fail":true}}

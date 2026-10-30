@@ -1,0 +1,6 @@
+{"id":"D50","kind":"defect","category":"syntax","summary":"Two BreadcrumbLists share one @id with different item lists.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"BreadcrumbList","@id":"https://ridleygask.example/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"Home"}]}]},
+{"@context":"https://schema.org","@graph":[{"@type":"BreadcrumbList","@id":"https://ridleygask.example/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://ridleygask.example/"}]}]}]}],
+"expect":{"fires":["ID-001"],"no_fail":true}}

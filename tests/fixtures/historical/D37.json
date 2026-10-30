@@ -1,0 +1,5 @@
+{"id":"D37","kind":"defect","category":"syntax","summary":"Typed node with no properties: founder Person.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask</p>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","name":"Ridley & Gask","founder":{"@type":"Person"}}]}],
+"expect":{"fires":["SYN-010"],"no_fail":true}}

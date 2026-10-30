@@ -1,0 +1,6 @@
+{"id":"FP18","kind":"must_not_flag","category":"identity","summary":"Plugin signature text elsewhere on the page does not make a block signed output.",
+"site":"https://bramble-legal.example",
+"pages":[{"path":"/","head":"<link rel=\"stylesheet\" href=\"https://bramble-legal.example/wp-content/plugins/mlt-onpage-automation-v2/admin/assets/front.css?ver=0.2.0\">",
+"body":"<p>Bramble Legal. The plugin marks its output with class=\"mlt-schema-output\".</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","name":"Bramble Legal"}]}],
+"expect":{"clean":true,"allow":["FEAT-007"],"block_source":{"0":"unknown"}}}

@@ -1,0 +1,6 @@
+{"id":"D47","kind":"defect","category":"facts","summary":"Homepage description starts mid-word (first character missing).",
+"site":"https://www.brackenridge.example",
+"detection":"optional","reason":"Catalogue: informational or review, low; optional for fixtures. It mirrors the meta description and is not a schema defect as such.",
+"pages":[{"path":"/","body":"<p>Brackenridge Tolmie Solicitors Limited</p>",
+"blocks":[{"@context":"https://schema.org","@type":"WebPage","@id":"https://www.brackenridge.example/","url":"https://www.brackenridge.example/","description":"lison Person A and Person B formerly of two other firms, are now trading as Brackenridge Tolmie Solicitors Limited."}]}],
+"expect":{"no_fail":true}}

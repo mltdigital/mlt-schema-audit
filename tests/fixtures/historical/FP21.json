@@ -1,0 +1,7 @@
+{"id":"FP21","kind":"must_not_flag","category":"identity","summary":"@id references that resolve on another page of the same site.",
+"site":"https://www.brackenridge.example",
+"pages":[{"path":"/","body":"<p>Brackenridge Tolmie Solicitors Limited</p>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","@id":"https://www.brackenridge.example/#organization","name":"Brackenridge Tolmie Solicitors Limited","hasOfferCatalog":{"@type":"OfferCatalog","name":"Legal Services","itemListElement":[{"@type":"Offer","itemOffered":{"@id":"https://www.brackenridge.example/commercial/#service"}}]}}]},
+{"path":"/commercial/","body":"<p>Commercial Law</p>",
+"blocks":[{"@context":"https://schema.org","@type":"Service","@id":"https://www.brackenridge.example/commercial/#service","name":"Commercial Law","url":"https://www.brackenridge.example/commercial/","provider":{"@id":"https://www.brackenridge.example/#organization"}}]}],
+"expect":{"clean":true}}

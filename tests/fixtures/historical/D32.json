@@ -1,0 +1,5 @@
+{"id":"D32","kind":"defect","category":"consistency","summary":"Same address on two business nodes with two phones, one published nowhere.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>51 Harbour Street, Portlarch KA91 5DX</p><a href=\"tel:01632 960341\">01632 960341</a>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":["LegalService","LocalBusiness"],"@id":"https://www.ridleygask.example/#legalservice","name":"Ridley & Gask Solicitors","telephone":"+44-1632-960-636","address":{"@type":"PostalAddress","streetAddress":"51 Harbour Street","addressLocality":"Portlarch","postalCode":"KA91 5DX","addressCountry":"GB"}},{"@type":["LegalService","LocalBusiness"],"@id":"https://www.ridleygask.example/#portlarch-office","name":"Ridley & Gask Solicitors - Portlarch Office","telephone":"01632 960341","address":{"@type":"PostalAddress","streetAddress":"51 Harbour Street","addressLocality":"Portlarch","postalCode":"KA91 5DX","addressCountry":"GB"}}]}]}],
+"expect":{"fires":["ID-004","FACT-001"],"no_fail":true}}

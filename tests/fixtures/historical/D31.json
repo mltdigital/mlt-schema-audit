@@ -1,0 +1,5 @@
+{"id":"D31","kind":"defect","category":"facts","summary":"Wrong postcode: the page shows a different postcode on the same street line.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>22 Bank Street, Glenmuir KA92 0AG</p><a href=\"tel:01632 960306\">01632 960306</a>",
+"blocks":[{"@context":"https://schema.org","@type":["LegalService","LocalBusiness"],"@id":"https://www.ridleygask.example/#glenmuir-office","name":"Ridley & Gask Solicitors - Glenmuir Office","telephone":"01632 960306","address":{"@type":"PostalAddress","streetAddress":"22 Bank Street","addressLocality":"Glenmuir","addressRegion":"Ayrshire","postalCode":"KA92 0AD","addressCountry":"GB"}}]}],
+"expect":{"fires":["FACT-007"],"outcome":{"FACT-007":"fail"}}}

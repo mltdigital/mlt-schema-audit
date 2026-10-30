@@ -1,0 +1,5 @@
+{"id":"D45","kind":"defect","category":"relevance","summary":"Companies House modelled as a membership body.",
+"site":"https://www.brackenridge.example",
+"pages":[{"path":"/","body":"<p>Brackenridge Tolmie Solicitors Limited</p>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","name":"Brackenridge Tolmie Solicitors Limited","memberOf":[{"@type":"Organization","name":"Companies House","url":"https://find-and-update.company-information.service.gov.uk/company/SC900003"}]}]}],
+"expect":{"fires":["REL-004"],"absent":["ID-002","URL-001"],"no_fail":true}}

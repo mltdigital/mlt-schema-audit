@@ -1,0 +1,5 @@
+{"id":"D14","kind":"defect","category":"urls","summary":"Business image hosted on a web partner's staging server under the client's name.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/road-traffic-accidents/","body":"<p>Corrie Ashford Personal Injury Solicitors</p>",
+"blocks":[{"@context":"http://schema.org","@type":"LegalService","name":"Corrie Ashford Personal Injury Solicitors","url":"https://www.corrieashford.example/accident-injury-at-work-claims/","image":"https://partnerdemo-hosting.com/AGENCY/corrieashford/wp-content/uploads/2024/12/road-traffic-accident.jpg"}]}],
+"expect":{"fires":["URL-001"]}}

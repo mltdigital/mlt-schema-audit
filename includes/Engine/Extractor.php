@@ -66,8 +66,10 @@ class Extractor {
 			'rdfa'      => (int) preg_match_all( '/<[a-z][^>]*\s(?:typeof|vocab)\s*=/i', $without_scripts ),
 			'canonical' => self::find_canonical( $html ),
 			'robots'    => self::find_meta( $html, 'robots' ),
+			'meta_description' => self::find_meta( $html, 'description' ),
 			'title'     => self::find_title( $html ),
 			'text'      => self::visible_text( $without_scripts ),
+			'body_text' => self::visible_text( self::body_of( $without_scripts ) ),
 			'tel_links' => self::tel_links( $without_scripts ),
 		);
 	}
@@ -370,6 +372,22 @@ class Extractor {
 	}
 
 	/**
+	 * The document body, so text in <title> and <head> is left out. Falls
+	 * back to everything after </head>, then to the whole document.
+	 *
+	 * @param string $html HTML with scripts removed.
+	 * @return string
+	 */
+	public static function body_of( $html ) {
+		$html = (string) $html;
+		if ( preg_match( '#<body\b[^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE ) ) {
+			return substr( $html, $m[0][1] + strlen( $m[0][0] ) );
+		}
+		$end = stripos( $html, '</head>' );
+		return false === $end ? $html : substr( $html, $end + 7 );
+	}
+
+	/**
 	 * Visible text: entity-decoded, tags stripped, whitespace collapsed
 	 * (including non-breaking spaces).
 	 *
@@ -393,8 +411,11 @@ class Extractor {
 	 */
 	public static function tel_links( $html ) {
 		$found = array();
-		if ( preg_match_all( '/href\s*=\s*(?:"|\')?\s*(?:tel|callto):([^"\'\s>]+)/i', (string) $html, $m ) ) {
-			foreach ( $m[1] as $raw ) {
+		// A quoted href runs to its closing quote, so "tel:01294 464341" keeps
+		// the digits after the space; an unquoted one ends at whitespace.
+		if ( preg_match_all( '/href\s*=\s*(?:"\s*(?:tel|callto):([^"]*)"|\'\s*(?:tel|callto):([^\']*)\'|(?:tel|callto):([^\s>]+))/i', (string) $html, $m, PREG_SET_ORDER ) ) {
+			foreach ( $m as $match ) {
+				$raw = isset( $match[3] ) && '' !== $match[3] ? $match[3] : ( isset( $match[2] ) && '' !== $match[2] ? $match[2] : $match[1] );
 				$found[] = rawurldecode( html_entity_decode( $raw, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
 			}
 		}

@@ -1,0 +1,6 @@
+{"id":"D09","kind":"defect","category":"facts","summary":"addressRegion Midlothian for a City of Edinburgh address. Needs a locality-to-region reference the audit does not hold.",
+"site":"https://www.calderwynd.example",
+"detection":"optional","reason":"The catalogue says pass without a locality-to-region reference list; v1 holds none (contract section 10: no external data).",
+"pages":[{"path":"/","body":"<p>Calder Wynd Solicitors, 27 Rose Street, Edinburgh EH2 9ZA</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","name":"Calder Wynd Solicitors","address":{"@type":"PostalAddress","streetAddress":"27 Rose Street","addressLocality":"Edinburgh","addressRegion":"Midlothian","postalCode":"EH2 9ZA","addressCountry":"GB"}}]}],
+"expect":{"no_fail":true}}

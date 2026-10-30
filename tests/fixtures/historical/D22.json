@@ -1,0 +1,7 @@
+{"id":"D22","kind":"defect","category":"facts","summary":"Homepage telephone published nowhere on the site; the same @id carries a different phone on another page.",
+"site":"https://www.marlowfenwick.example",
+"pages":[{"path":"/","body":"<a href=\"tel:08081570411\">0808 157 0411</a><p>Call 0808 157 0728 or 01632 960 494. Out of hours: 0808 157 0444.</p><p>Marlow Fenwick Solicitors, Kingsway House, 18 Park Row, Leeds LS1 9ZZ</p>",
+"blocks":[{"@context":"https://schema.org","@type":["LegalService","LocalBusiness"],"@id":"https://www.marlowfenwick.example/#legalservice","name":"Marlow Fenwick Solicitors","telephone":"+44 808 157 0283","address":{"@type":"PostalAddress","streetAddress":"Kingsway House, 18 Park Row","addressLocality":"Leeds","postalCode":"LS1 9ZZ","addressCountry":"GB"}}]},
+{"path":"/motoring-offences/","body":"<p>Marlow Fenwick Solicitors, Kingsway House, 18 Park Row, Leeds LS1 9ZZ. 01632 960 494</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.marlowfenwick.example/#legalservice","name":"Marlow Fenwick Solicitors","telephone":"+44-1632-960-494","address":{"@type":"PostalAddress","streetAddress":"Kingsway House, 18 Park Row","addressLocality":"Leeds","postalCode":"LS1 9ZZ","addressCountry":"GB"}}]}],
+"expect":{"fires":["FACT-001","SITE-001"],"no_fail":true}}

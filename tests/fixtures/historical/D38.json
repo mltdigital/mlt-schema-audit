@@ -1,0 +1,5 @@
+{"id":"D38","kind":"defect","category":"relevance","summary":"An office address published on the page is declared by no business node.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>51 Harbour Street, Portlarch KA91 5DX</p><a href=\"tel:01632 960341\">01632 960341</a><div class=\"branch\"><h3>Easthaven</h3><p>84 Main Street, Easthaven KA93 8AN</p><a href=\"tel:01632 960506\">01632 960506</a></div>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":["LegalService","LocalBusiness"],"@id":"https://www.ridleygask.example/#legalservice","name":"Ridley & Gask Solicitors","telephone":"01632 960341","address":{"@type":"PostalAddress","streetAddress":"51 Harbour Street","addressLocality":"Portlarch","postalCode":"KA91 5DX","addressCountry":"GB"}}]}]}],
+"expect":{"fires":["REL-006"],"no_fail":true}}

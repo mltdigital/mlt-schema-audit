@@ -28,6 +28,13 @@ class PageFacts {
 	public $text;
 
 	/**
+	 * Visible text of the body only, without <title> or other head text.
+	 *
+	 * @var string
+	 */
+	public $body_text;
+
+	/**
 	 * Document title.
 	 *
 	 * @var string
@@ -56,6 +63,7 @@ class PageFacts {
 	public function __construct( array $extraction ) {
 		$this->text      = (string) $extraction['text'];
 		$this->title     = (string) $extraction['title'];
+		$this->body_text = isset( $extraction['body_text'] ) ? (string) $extraction['body_text'] : $this->text;
 		$this->phones    = self::harvest_phones( $this->text, (array) $extraction['tel_links'] );
 		$this->postcodes = self::harvest_postcodes( $this->text );
 	}
@@ -169,17 +177,28 @@ class PageFacts {
 	}
 
 	/**
+	 * Words that carry no identity in a business name.
+	 */
+	const NAME_STOPWORDS = array( 'the', 'and', 'of', 'llp', 'ltd', 'limited', 'plc', 'solicitors', 'solicitor', 'lawyers', 'law', 'legal', 'office', 'branch', 'co', 'company', 'services', 'service' );
+
+	/**
 	 * Whether a business or person name appears in the text or title.
 	 *
 	 * Case-insensitive, '&' and 'and' equivalent, whitespace-tolerant. A
 	 * trailing legal suffix (LLP, Ltd, Limited, Solicitors) may be absent on
-	 * the page, because pages often omit it in running text.
+	 * the page, because pages often omit it in running text. A brand written
+	 * as one word in the markup ("kestrelmoray LLP") matches the same letters
+	 * with spaces on the page ("Kestrel Moray LLP"). A branch name ("Firm
+	 * Town") matches when every distinctive word is on the page, because
+	 * branch blocks show the town as a heading next to the firm's name.
 	 *
-	 * @param string $name Name.
+	 * @param string $name    Name.
+	 * @param bool   $body    Only the body text (not the title or head).
 	 * @return bool
 	 */
-	public function has_name( $name ) {
-		$name = trim( html_entity_decode( (string) $name, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
+	public function has_name( $name, $body = false ) {
+		$haystacks = $body ? array( $this->body_text ) : array( $this->text, $this->title );
+		$name      = trim( html_entity_decode( (string) $name, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
 		if ( '' === $name ) {
 			return false;
 		}
@@ -193,11 +212,131 @@ class PageFacts {
 				$parts[] = ( '&' === $token || 0 === strcasecmp( 'and', $token ) ) ? '(?:&|and)' : preg_quote( $token, '/' );
 			}
 			$pattern = '/(?<![\p{L}\p{N}])' . implode( '\s*', $parts ) . '(?![\p{L}\p{N}])/iu';
-			if ( preg_match( $pattern, $this->text ) || preg_match( $pattern, $this->title ) ) {
-				return true;
+			foreach ( $haystacks as $haystack ) {
+				if ( preg_match( $pattern, $haystack ) ) {
+					return true;
+				}
+			}
+			$compact = self::compact( $candidate );
+			if ( strlen( $compact ) >= 6 ) {
+				foreach ( $haystacks as $haystack ) {
+					if ( false !== strpos( self::compact( $haystack ), $compact ) ) {
+						return true;
+					}
+				}
 			}
 		}
+		$words = self::significant_words( $name );
+		if ( count( $words ) >= 2 ) {
+			$text = strtolower( implode( ' ', $haystacks ) );
+			foreach ( $words as $word ) {
+				if ( ! preg_match( '/(?<![\p{L}\p{N}])' . preg_quote( $word, '/' ) . '(?![\p{L}\p{N}])/u', $text ) ) {
+					return false;
+				}
+			}
+			return true;
+		}
 		return false;
+	}
+
+	/**
+	 * Lower case letters and digits only, '&' read as 'and'.
+	 *
+	 * @param string $text Text.
+	 * @return string
+	 */
+	public static function compact( $text ) {
+		$text = strtolower( str_replace( '&', 'and', (string) $text ) );
+		return (string) preg_replace( '/[^\p{L}\p{N}]+/u', '', $text );
+	}
+
+	/**
+	 * Distinctive words of a name: three or more letters, not a stopword.
+	 *
+	 * @param string $name Name.
+	 * @return array
+	 */
+	public static function significant_words( $name ) {
+		$out = array();
+		foreach ( preg_split( '/[^\p{L}\p{N}]+/u', strtolower( (string) $name ) ) as $word ) {
+			if ( strlen( $word ) >= 3 && ! in_array( $word, self::NAME_STOPWORDS, true ) ) {
+				$out[] = $word;
+			}
+		}
+		return array_values( array_unique( $out ) );
+	}
+
+	/**
+	 * Byte offsets in the visible text where a phone number appears.
+	 *
+	 * @param string $value Phone.
+	 * @return array
+	 */
+	public function phone_offsets( $value ) {
+		$nsn = self::phone_nsn( $value );
+		$out = array();
+		if ( '' === $nsn || ! preg_match_all( '/\+?\(?\d[\d\s().\-\/]{7,}\d/', $this->text, $m, PREG_OFFSET_CAPTURE ) ) {
+			return $out;
+		}
+		foreach ( $m[0] as $match ) {
+			$digits = (string) preg_replace( '/\D+/', '', (string) preg_replace( '/\(0\)/', '', $match[0] ) );
+			foreach ( array( strlen( $digits ), 13, 12, 11, 10 ) as $length ) {
+				if ( strlen( $digits ) >= $length && self::phone_nsn( substr( $digits, 0, $length ) ) === $nsn ) {
+					$out[] = (int) $match[1];
+					break;
+				}
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Every postcode in the visible text with its byte offset.
+	 *
+	 * @return array List of [ compact, offset ].
+	 */
+	public function postcode_offsets() {
+		$out = array();
+		if ( preg_match_all( '/\b([A-Za-z]{1,2}[0-9][A-Za-z0-9]?)\s*([0-9][A-Za-z]{2})\b/', $this->text, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE ) ) {
+			foreach ( $m as $match ) {
+				$compact = self::postcode_compact( $match[1][0] . $match[2][0] );
+				if ( '' !== $compact ) {
+					$out[] = array( $compact, (int) $match[0][1] );
+				}
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * The postcode the page prints straight after a street line, if any.
+	 *
+	 * @param string $street Street address.
+	 * @param int    $window Characters searched after the street.
+	 * @return array Compact postcodes, one per occurrence of the street.
+	 */
+	public function postcodes_after_street( $street, $window = 60 ) {
+		$tokens = preg_split( '/[\s,]+/', trim( html_entity_decode( (string) $street, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) ) );
+		$tokens = array_values( array_filter( $tokens, 'strlen' ) );
+		if ( count( $tokens ) < 2 ) {
+			return array();
+		}
+		$pattern = '/(?<![\p{L}\p{N}])' . implode( '[\s,]+', array_map( static function ( $t ) {
+			return preg_quote( $t, '/' );
+		}, $tokens ) ) . '(?![\p{L}\p{N}])/iu';
+		$out = array();
+		if ( preg_match_all( $pattern, $this->text, $m, PREG_OFFSET_CAPTURE ) ) {
+			foreach ( $m[0] as $match ) {
+				$after = substr( $this->text, $match[1] + strlen( $match[0] ), $window );
+				if ( preg_match( '/\b([A-Za-z]{1,2}[0-9][A-Za-z0-9]?)\s*([0-9][A-Za-z]{2})\b/', $after, $pc ) ) {
+					$compact = self::postcode_compact( $pc[1] . $pc[2] );
+					if ( '' !== $compact ) {
+						$out[] = $compact;
+					}
+				}
+			}
+		}
+		return $out;
 	}
 
 	/**

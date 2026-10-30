@@ -1,0 +1,5 @@
+{"id":"D07","kind":"defect","category":"urls","summary":"Business url and logo on http and the bare host of an https www site.",
+"site":"https://www.calderwynd.example",
+"pages":[{"path":"/","head":"<link rel=\"canonical\" href=\"https://www.calderwynd.example/\">","body":"<p>Calder Wynd Solicitors</p>",
+"blocks":[{"@context":"http://schema.org","@type":"Organization","name":"Calder Wynd Solicitors","url":"http://calderwynd.example","logo":"http://calderwynd.example/wp-content/themes/child/images/logo.svg"}]}],
+"expect":{"fires":["URL-002"],"no_fail":true}}

@@ -1,0 +1,5 @@
+{"id":"D10","kind":"defect","category":"features","summary":"Self-serving aggregateRating on the firm's own LegalService.",
+"site":"https://bramble-legal.example",
+"pages":[{"path":"/","body":"<p>Bramble Legal</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://bramble-legal.example/#legalservice","name":"Bramble Legal","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.8","reviewCount":"180"}}]}],
+"expect":{"fires":["FEAT-001"],"no_fail":true}}

@@ -1,0 +1,6 @@
+{"id":"FP06","kind":"must_not_flag","category":"urls","summary":"image as a URL string, an ImageObject and an @id reference; all resolve.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask. Ridley &amp; Gask Glenmuir, 22 Bank Street, Glenmuir KA92 0AG</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://ridleygask.example/#organization","name":"Ridley & Gask","logo":{"@type":"ImageObject","@id":"https://ridleygask.example/#logo","url":"https://ridleygask.example/wp-content/uploads/2023/05/logo.png","width":300,"height":300},"image":{"@id":"https://ridleygask.example/#logo"}},{"@type":"LegalService","@id":"https://ridleygask.example/#office-glenmuir","name":"Ridley & Gask Glenmuir","image":"https://ridleygask.example/wp-content/uploads/2024/05/header.webp","address":{"@type":"PostalAddress","streetAddress":"22 Bank Street","addressLocality":"Glenmuir","postalCode":"KA92 0AG","addressCountry":"GB"}}]}]}],
+"resources":{"https://ridleygask.example/wp-content/uploads/2023/05/logo.png":200,"https://ridleygask.example/wp-content/uploads/2024/05/header.webp":200},
+"expect":{"clean":true}}

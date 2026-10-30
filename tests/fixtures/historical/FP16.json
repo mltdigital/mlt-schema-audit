@@ -1,0 +1,5 @@
+{"id":"FP16","kind":"must_not_flag","category":"features","summary":"Valid one-question FAQPage that is no longer eligible for FAQ rich results.",
+"site":"https://www.kestrelmoray.example",
+"pages":[{"path":"/conveyancing/","body":"<h2>What are the steps involved in buying a home?</h2><p>When you see a property you like, you should get in touch with us.</p>",
+"blocks":[{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What are the steps involved in buying a home?","acceptedAnswer":{"@type":"Answer","text":"When you see a property you like, you should get in touch with us."}}]}]}],
+"expect":{"clean":true}}

@@ -1,0 +1,5 @@
+{"id":"FP13","kind":"must_not_flag","category":"features","summary":"Home breadcrumb with a single ListItem and no item.",
+"site":"https://www.kestrelmoray.example",
+"pages":[{"path":"/","body":"<p>Home</p>",
+"blocks":[{"@context":"https://schema.org","@type":"BreadcrumbList","@id":"https://www.kestrelmoray.example/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"Home"}]}]}],
+"expect":{"clean":true}}

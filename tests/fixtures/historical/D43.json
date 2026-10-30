@@ -1,0 +1,6 @@
+{"id":"D43","kind":"defect","category":"relevance","summary":"Business typed RealEstateAgent while the page says the firm does not market property.",
+"site":"https://www.brackenridge.example",
+"detection":"optional","reason":"Catalogue: needs a text heuristic, detection optional; multi-typing itself must not be flagged.",
+"pages":[{"path":"/","body":"<p>Brackenridge Tolmie Solicitors Limited. Although we do not market your property, we are happy to suggest a suitable Estate Agent for you.</p>",
+"blocks":[{"@context":"https://schema.org","@type":["LegalService","RealEstateAgent","LocalBusiness","Organization"],"@id":"https://www.brackenridge.example/#organization","name":"Brackenridge Tolmie Solicitors Limited"}]}],
+"expect":{"no_fail":true,"absent":["SYN-007"]}}

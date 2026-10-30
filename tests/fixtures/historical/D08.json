@@ -1,0 +1,5 @@
+{"id":"D08","kind":"defect","category":"syntax","summary":"Branch office modelled as an areaServed City carrying business properties.",
+"site":"https://www.calderwynd.example",
+"pages":[{"path":"/","body":"<p>Calder Wynd Solicitors. Unit 5 Dornoch Business Park, Dornoch IV25 9ZB. 01632 960 188</p>",
+"blocks":[{"@context":"http://schema.org","@type":"LegalService","name":"Calder Wynd Solicitors","areaServed":[{"@type":"City","name":"Calder Wynd Solicitors Dornoch","telephone":"+44-1632-960-188","priceRange":"££","address":{"@type":"PostalAddress","streetAddress":"Unit 5 Dornoch Business Park","addressLocality":"Dornoch","postalCode":"IV25 9ZB","addressCountry":"GB"}}]}]}],
+"expect":{"fires":["SYN-008"],"no_fail":true}}

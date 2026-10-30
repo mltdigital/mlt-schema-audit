@@ -1,0 +1,5 @@
+{"id":"FP05","kind":"must_not_flag","category":"syntax","summary":"Quoted ratingValue and reviewCount on a non-business parent.",
+"site":"https://www.example-legal.example",
+"pages":[{"path":"/","body":"<p>Example</p>",
+"blocks":[{"@context":"https://schema.org","@type":"Product","name":"Example","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.9","reviewCount":"120"}}]}],
+"expect":{"clean":true}}

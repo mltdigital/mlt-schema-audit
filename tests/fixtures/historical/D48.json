@@ -1,0 +1,5 @@
+{"id":"D48","kind":"defect","category":"features","summary":"FAQPage with no questions.",
+"site":"https://www.example-legal.example",
+"pages":[{"path":"/faq/","body":"<h1>Frequently Asked Questions</h1>",
+"blocks":[{"@context":"https://schema.org","@type":"FAQPage","name":"Frequently Asked Questions"}]}],
+"expect":{"fires":["FEAT-002"],"outcome":{"FEAT-002":"fail"}}}

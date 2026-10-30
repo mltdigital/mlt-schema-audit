@@ -1,0 +1,4 @@
+{"id":"FP04","kind":"must_not_flag","category":"syntax","summary":"A valid block in a single-quoted script tag.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/road-traffic-accidents/","html":"<!doctype html><html><head><title>Corrie Ashford</title><script type='application/ld+json'>{\"@context\":\"http://schema.org\",\"@type\":\"LegalService\",\"name\":\"Corrie Ashford Personal Injury Solicitors\",\"telephone\":\"+44-1632-960-214\"}</script></head><body><p>Corrie Ashford Personal Injury Solicitors. 01632 960 214</p></body></html>"}],
+"expect":{"clean":true,"allow":["FEAT-007"],"parsed":1}}

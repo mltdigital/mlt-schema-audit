@@ -1,0 +1,4 @@
+{"id":"FP03","kind":"must_not_flag","category":"syntax","summary":"JSON-LD in script tags with unquoted attributes (cache plugin output).",
+"site":"https://www.marlowfenwick.example",
+"pages":[{"path":"/","html":"<!doctype html><html><head><title>Marlow Fenwick Solicitors</title><script type=application/ld+json class=yoast-schema-graph>{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"WebSite\",\"@id\":\"https://www.marlowfenwick.example/#website\",\"url\":\"https://www.marlowfenwick.example/\",\"name\":\"Marlow Fenwick - Solicitors\"}]}</script><script type=application/ld+json>{\"@context\":\"https://schema.org\",\"@type\":[\"LegalService\",\"LocalBusiness\"],\"@id\":\"https://www.marlowfenwick.example/#legalservice\",\"name\":\"Marlow Fenwick Solicitors\",\"url\":\"https://www.marlowfenwick.example/\"}</script></head><body><p>Marlow Fenwick Solicitors</p></body></html>"}],
+"expect":{"clean":true,"allow":["FEAT-007"],"parsed":2}}

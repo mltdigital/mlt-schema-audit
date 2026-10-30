@@ -1,0 +1,7 @@
+{"id":"D16","kind":"defect","category":"consistency","summary":"Same business @id asserts different aggregateRating values on different pages.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/","body":"<p>Corrie Ashford Personal Injury Solicitors. 01632 960 214</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.corrieashford.example/#legalservice","name":"Corrie Ashford Personal Injury Solicitors","telephone":"+44-1632-960-214","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.97","reviewCount":315}}]},
+{"path":"/glasgow/","body":"<p>Corrie Ashford Personal Injury Solicitors. 01632 960 214</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.corrieashford.example/#legalservice","name":"Corrie Ashford Personal Injury Solicitors","telephone":"+44-1632-960-214","aggregateRating":{"@type":"AggregateRating","ratingValue":"5","reviewCount":259,"bestRating":"5","worstRating":"1"}}]}],
+"expect":{"fires":["SITE-001","FEAT-001"],"no_fail":true}}

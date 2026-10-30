@@ -1,0 +1,6 @@
+{"id":"D28","kind":"defect","category":"identity","summary":"Stale WordPress site title names a different business; title and og:site_name agree with the wrong name.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","head":"<title>Home - Coastline Estate Agents</title><meta property=\"og:site_name\" content=\"Coastline Estate Agents\" />",
+"body":"<footer><p>Ridley &amp; Gask LLP, 51 Harbour Street, Portlarch KA91 5DX</p></footer>",
+"blocks":[{"@context":"https://schema.org","@type":"WebSite","@id":"https://ridleygask.example/#website","url":"https://ridleygask.example/","name":"Coastline Estate Agents"}]}],
+"expect":{"fires":["FACT-009"],"no_fail":true}}

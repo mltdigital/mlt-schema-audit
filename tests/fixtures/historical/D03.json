@@ -1,0 +1,6 @@
+{"id":"D03","kind":"defect","category":"urls","summary":"Legacy /images/ image and logo URLs on the business node return 404.",
+"site":"https://www.kestrelmoray.example",
+"pages":[{"path":"/family-law/","body":"<p>Kestrel Moray LLP</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.kestrelmoray.example/#business","name":"Kestrel Moray LLP","image":"https://www.kestrelmoray.example/images/aberdeen06.jpg","logo":{"@type":"ImageObject","url":"https://www.kestrelmoray.example/images/logo.png"}}]}],
+"resources":{"https://www.kestrelmoray.example/images/aberdeen06.jpg":404,"https://www.kestrelmoray.example/images/logo.png":404},
+"expect":{"fires":["URL-004"],"min_count":{"URL-004":2}}}

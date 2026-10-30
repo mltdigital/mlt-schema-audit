@@ -1,0 +1,5 @@
+{"id":"D17","kind":"defect","category":"features","summary":"Third-party reviews republished as first-party Review markup on the firm's own node.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/","body":"<p>Corrie Ashford Personal Injury Solicitors</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.corrieashford.example/#legalservice","name":"Corrie Ashford Personal Injury Solicitors","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.97","reviewCount":315},"review":[{"@type":"Review","author":{"@type":"Person","name":"Person A"},"datePublished":"2024-07-23","publisher":{"@type":"Organization","name":"Solicitor Reviews Hub"},"reviewRating":{"@type":"Rating","ratingValue":"5"}}]}]}],
+"expect":{"fires":["FEAT-001","FEAT-008"],"no_fail":true}}

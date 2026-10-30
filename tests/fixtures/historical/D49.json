@@ -1,0 +1,5 @@
+{"id":"D49","kind":"defect","category":"identity","summary":"Root business node with a foreign @id and another firm's name on this site's url.",
+"site":"https://www.example-legal.example",
+"pages":[{"path":"/","body":"<p>Example Legal Firm</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://www.example-legal.example/#organization","name":"Example Legal Firm","url":"https://example-legal.example/"},{"@type":"LegalService","@id":"https://otherfirm.example.org/#business","name":"Copied Firm","url":"https://example-legal.example/"}]}]}],
+"expect":{"fires":["FACT-003","ID-002"],"no_fail":true}}

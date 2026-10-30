@@ -1,0 +1,7 @@
+{"id":"D20","kind":"defect","category":"consistency","summary":"#website named differently on different pages; site-wide #webpage reused for two pages.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/","body":"<p>Corrie Ashford</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://www.corrieashford.example/#website","name":"Corrie Ashford","url":"https://www.corrieashford.example/"},{"@type":"WebPage","@id":"https://www.corrieashford.example/#webpage","url":"https://www.corrieashford.example/","name":"Personal Injury Solicitors Scotland | Corrie Ashford"}]}]},
+{"path":"/edinburgh/","body":"<p>Corrie Ashford Personal Injury Solicitors</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://www.corrieashford.example/#website","name":"Corrie Ashford Personal Injury Solicitors","url":"https://www.corrieashford.example/"},{"@type":"WebPage","@id":"https://www.corrieashford.example/#webpage","url":"https://www.corrieashford.example/edinburgh/","name":"Corrie Ashford Personal Injury Solicitors"}]}]}],
+"expect":{"fires":["SITE-003"],"no_fail":true}}

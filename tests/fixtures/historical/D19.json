@@ -1,0 +1,6 @@
+{"id":"D19","kind":"defect","category":"urls","summary":"Legacy /images/ URL returns 404 while the uploads equivalent returns 200.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/","body":"<p>Corrie Ashford Personal Injury Solicitors</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"LegalService","@id":"https://www.corrieashford.example/#legalservice","name":"Corrie Ashford Personal Injury Solicitors","image":"https://www.corrieashford.example/images/personal-injury-solicitors-edinburgh.gif","logo":"https://www.corrieashford.example/wp-content/uploads/2024/12/personal-injury-solicitors-edinburgh.png"}]}]}],
+"resources":{"https://www.corrieashford.example/images/personal-injury-solicitors-edinburgh.gif":404,"https://www.corrieashford.example/wp-content/uploads/2024/12/personal-injury-solicitors-edinburgh.png":200},
+"expect":{"fires":["URL-004"],"min_count":{"URL-004":1},"max_count":{"URL-004":1}}}

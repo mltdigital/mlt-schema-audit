@@ -1,0 +1,6 @@
+{"id":"D26","kind":"defect","category":"facts","summary":"Implausible foundingDate and geo about 4 km from the postcode. Needs references the audit does not hold.",
+"site":"https://www.marlowfenwick.example",
+"detection":"optional","reason":"Catalogue: review only where the audit has a reference (postcode centroids, earliest content date). v1 has neither, and a portrait used as a logo is not reliably machine-detectable.",
+"pages":[{"path":"/","body":"<p>Marlow Fenwick Solicitors, Kingsway House, 18 Park Row, Leeds LS1 9ZZ</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","name":"Marlow Fenwick Solicitors","foundingDate":"2022","address":{"@type":"PostalAddress","streetAddress":"Kingsway House, 18 Park Row","addressLocality":"Leeds","postalCode":"LS1 9ZZ","addressCountry":"GB"},"geo":{"@type":"GeoCoordinates","latitude":53.443397,"longitude":-2.2392398}}]}],
+"expect":{"no_fail":true}}

@@ -494,7 +494,7 @@ class Worker {
 		if ( self::full_scope( $run ) ) {
 			$facts = $this->repo->page_facts( (int) $run['id'] );
 			$urls  = $this->repo->url_index( (int) $run['id'] );
-			foreach ( SiteRules::identity_conflicts( $facts ) as $url_id => $findings ) {
+			foreach ( SiteRules::evaluate( $facts ) as $url_id => $findings ) {
 				foreach ( $findings as $finding ) {
 					$this->store_finding( (int) $run['id'], (int) $url_id, isset( $urls[ $url_id ] ) ? $urls[ $url_id ] : '', $finding );
 				}

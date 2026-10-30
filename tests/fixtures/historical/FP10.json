@@ -1,0 +1,5 @@
+{"id":"FP10","kind":"must_not_flag","category":"relevance","summary":"Minimal Yoast-only page: no service entity, no optional properties.",
+"site":"https://www.brackenridge.example",
+"pages":[{"path":"/bankruptcy/","body":"<p>Brackenridge Tolmie Solicitors Limited</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://www.brackenridge.example/bankruptcy/","url":"https://www.brackenridge.example/bankruptcy/","isPartOf":{"@id":"https://www.brackenridge.example/#website"}},{"@type":"WebSite","@id":"https://www.brackenridge.example/#website","url":"https://www.brackenridge.example/"},{"@type":"Organization","@id":"https://www.brackenridge.example/#organization","name":"Brackenridge Tolmie Solicitors Limited","url":"https://www.brackenridge.example/"}]}]}],
+"expect":{"clean":true}}

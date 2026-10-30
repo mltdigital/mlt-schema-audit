@@ -1,0 +1,5 @@
+{"id":"D23","kind":"defect","category":"urls","summary":"Business image is a hard-coded CDN revision URL that rotates on cache purge (404 when observed).",
+"site":"https://www.marlowfenwick.example",
+"pages":[{"path":"/","body":"<p>Marlow Fenwick Solicitors</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.marlowfenwick.example/#legalservice","name":"Marlow Fenwick Solicitors","image":"https://cdn-abcdefg.nitrocdn.com/XyZaBcDeFgHiJkLmNoPqRsTuVwXyZaBc/assets/images/optimized/rev-1db69d5/www.marlowfenwick.example/wp-content/uploads/2012/12/photo-person-a.jpg"}]}],
+"expect":{"fires":["URL-007"],"no_fail":true},"note":"Off-host, so the liveness check (own host only, contract section 4) does not run; the offline review is the expected result."}

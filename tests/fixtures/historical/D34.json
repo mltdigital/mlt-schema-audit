@@ -1,0 +1,6 @@
+{"id":"D34","kind":"defect","category":"urls","summary":"Organisation logo URL does not exist (404); the www host on a bare-host site is not itself a defect.",
+"site":"https://ridleygask.example",
+"pages":[{"path":"/","body":"<p>Ridley &amp; Gask</p>",
+"blocks":[{"@context":"https://schema.org","@type":"Organization","@id":"https://www.ridleygask.example/#organization","name":"Ridley & Gask","logo":{"@type":"ImageObject","url":"https://www.ridleygask.example/wp-content/uploads/logo.png"}}]}],
+"resources":{"https://www.ridleygask.example/wp-content/uploads/logo.png":404},
+"expect":{"fires":["URL-004"],"absent":["ID-002"]}}

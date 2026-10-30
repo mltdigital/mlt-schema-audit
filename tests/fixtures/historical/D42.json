@@ -1,0 +1,7 @@
+{"id":"D42","kind":"defect","category":"consistency","summary":"The same business @id publishes different review counts on different pages.",
+"site":"https://www.brackenridge.example",
+"pages":[{"path":"/","body":"<p>Brackenridge Tolmie Solicitors Limited</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.brackenridge.example/#organization","name":"Brackenridge Tolmie Solicitors Limited","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.9","reviewCount":"534"}}]},
+{"path":"/conveyancing/","body":"<p>Brackenridge Tolmie Solicitors Limited</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.brackenridge.example/#organization","name":"Brackenridge Tolmie Solicitors Limited","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.9","reviewCount":"553"}}]}],
+"expect":{"fires":["SITE-001"],"no_fail":true}}

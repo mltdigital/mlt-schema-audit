@@ -1,0 +1,5 @@
+{"id":"D01","kind":"defect","category":"features","summary":"Self-serving aggregateRating (quoted values) on the firm's own LegalService.",
+"site":"https://www.kestrelmoray.example",
+"pages":[{"path":"/","body":"<h1>Kestrel Moray LLP</h1><p>12 Quarry Lane, Aberdeen AB10 9QX</p>",
+"blocks":[{"@context":"https://schema.org","@type":["LegalService","LocalBusiness"],"@id":"https://www.kestrelmoray.example/#kestrelmoray","name":"kestrelmoray LLP","url":"https://www.kestrelmoray.example/","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.7","reviewCount":"52"}}]}],
+"expect":{"fires":["FEAT-001"],"absent":["FEAT-004","SYN-001"],"no_fail":true}}

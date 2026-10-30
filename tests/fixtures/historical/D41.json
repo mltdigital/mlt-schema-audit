@@ -1,0 +1,5 @@
+{"id":"D41","kind":"defect","category":"features","summary":"Self-serving rating and a Review whose publisher is Google on the firm's own service node.",
+"site":"https://www.brackenridge.example",
+"pages":[{"path":"/debt-collection/","body":"<p>Debt Collection Solicitors Glasgow</p>",
+"blocks":[{"@context":"https://schema.org","@type":"LegalService","@id":"https://www.brackenridge.example/debt-collection/#service-rich","name":"Debt Collection Solicitors Glasgow","aggregateRating":{"@type":"AggregateRating","ratingValue":"4.9","reviewCount":"534"},"review":{"@type":"Review","author":{"@type":"Person","name":"Person A"},"publisher":{"@type":"Organization","name":"Google.co.uk"},"datePublished":"2025-08-05","reviewBody":"A hard purchase as we were buying a house while based elsewhere; a stress-free process.","reviewRating":{"@type":"Rating","ratingValue":"5","bestRating":"5"}}}]}],
+"expect":{"fires":["FEAT-001","FEAT-008"],"no_fail":true},"note":"The review-to-service topic mismatch needs a topic heuristic and is not required (catalogue)."}

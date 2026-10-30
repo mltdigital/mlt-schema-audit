@@ -1,0 +1,6 @@
+{"id":"D11","kind":"defect","category":"consistency","summary":"One @id declares two different logos; the homepage is described by two WebPage nodes.",
+"site":"https://bramble-legal.example",
+"pages":[{"path":"/","body":"<p>Bramble Legal</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://bramble-legal.example/#organization","name":"Bramble Legal","url":"https://bramble-legal.example/","logo":{"@type":"ImageObject","@id":"https://bramble-legal.example/#/schema/logo/image/","url":"https://bramble-legal.example/wp-content/uploads/2025/03/Bramble-Legal.png"}},{"@type":"WebPage","@id":"https://bramble-legal.example/","url":"https://bramble-legal.example/","name":"Agricultural Solicitors in Stirling"}]},
+{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://bramble-legal.example/#organization","name":"Bramble Legal","logo":{"@type":"ImageObject","@id":"https://bramble-legal.example/#logo","url":"https://bramble-legal.example/wp-content/uploads/2019/09/bramble-legal-logo.png"}},{"@type":"WebPage","@id":"https://bramble-legal.example/#webpage","url":"https://bramble-legal.example/","name":"Bramble Legal | Home"}]}]}],
+"expect":{"fires":["ID-001","REL-005"],"no_fail":true}}

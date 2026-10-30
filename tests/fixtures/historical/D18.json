@@ -1,0 +1,8 @@
+{"id":"D18","kind":"defect","category":"consistency","summary":"#organization declares different logos on different pages; a telephone present on one page only is not a conflict.",
+"site":"https://www.corrieashford.example",
+"pages":[{"path":"/","body":"<p>Corrie Ashford</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://www.corrieashford.example/#organization","name":"Corrie Ashford","logo":"https://www.corrieashford.example/images/logo.png"}]}]},
+{"path":"/edinburgh/","body":"<p>Corrie Ashford. 01632 960 214</p>",
+"blocks":[{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://www.corrieashford.example/#organization","name":"Corrie Ashford","telephone":"+44-1632-960-214","logo":"https://www.corrieashford.example/images/personal-injury-solicitors-edinburgh.gif"}]}]}],
+"resources":{"https://www.corrieashford.example/images/logo.png":404,"https://www.corrieashford.example/images/personal-injury-solicitors-edinburgh.gif":404},
+"expect":{"fires":["SITE-001","URL-004"],"absent_property":{"SITE-001":["telephone"]}}}
