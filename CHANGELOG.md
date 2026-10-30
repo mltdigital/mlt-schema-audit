@@ -4,6 +4,14 @@ All notable changes to MLT Schema Audit. Dates are UK dates. Versions follow sem
 
 ## Unreleased (0.1.0)
 
+### Stage 4: manual workflow
+
+- Admin screens under Schema Audit: Audits (start, live progress, run list), one audit (coverage, exclusions with reasons, comparison with the previous audit, pages), Findings (filters by audit, group, severity, outcome, status, rule and text; recheck of ticked findings), one finding (rule explanation, evidence as plain text, work status, owner, due date, external link, exception reason, reviewer and date, notes, history), Settings and Health.
+- Work statuses as the contract lists them; an accepted exception or false positive needs a reason, a reviewer and a review date. Verification state is set only by the scanner, and marking a finding Resolved does not verify it.
+- Export: a ZIP of Summary, Pages, Findings and Change log CSV files plus `manifest.json`, or any CSV on its own, streamed from memory (a small ZIP writer, because ZipArchive needs a file on disk). Filtered exports say so in the manifest and the Summary sheet. Cells that start with `=`, `+`, `-`, `@`, tab or carriage return are neutralised; every cell is quoted, so leading zeros and line breaks survive; UTF-8 with a byte-order mark.
+- Recheck: starts a run for the pages behind selected findings, using page URLs from the register, never from the request. Site-wide findings are rechecked by a full audit.
+- Every handler checks a capability and a nonce first; there are no REST routes and nothing for logged-out users. While an audit screen is open, a script keeps the audit moving in short steps (text only, never markup).
+
 ### Historical fixtures and rule set 2026.10.2
 
 - 71 anonymised fixtures in `tests/fixtures/historical/` (D01 to D50, FP01 to FP21), one per entry in the July to August pilot defect catalogue, plus the publishing plugin's golden pass reference in `tests/fixtures/regression/`. Fictional firms on reserved `.example` hosts, Ofcom drama-range numbers; a test fails if a client name or a non-fictional number appears. Every defect is detected as the catalogue expects; every must-not-flag case is clean. Four defects (D09, D26, D43, D47) need external references or text heuristics the catalogue itself marks optional; their fixtures assert only that nothing fails.

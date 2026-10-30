@@ -412,6 +412,18 @@ class Repository {
 	}
 
 	/**
+	 * One occurrence with its page.
+	 *
+	 * @param int $id Occurrence ID.
+	 * @return array|null
+	 */
+	public function occurrence( $id ) {
+		global $wpdb;
+		$row = $wpdb->get_row( $wpdb->prepare( "SELECT o.*, u.url AS page_url, u.title AS page_title FROM {$this->t( 'occurrences' )} o LEFT JOIN {$this->t( 'run_urls' )} u ON u.id = o.run_url_id WHERE o.id = %d", (int) $id ), ARRAY_A );
+		return $row ? $row : null;
+	}
+
+	/**
 	 * Link a run's occurrences to their issue.
 	 *
 	 * @param int    $run_id    Run ID.
@@ -677,6 +689,18 @@ class Repository {
 	public function issue_events_since( $from_id, $limit = 5000 ) {
 		global $wpdb;
 		return (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$this->t( 'events' )} WHERE object_type = 'issue' AND id > %d ORDER BY id ASC LIMIT %d", (int) $from_id, (int) $limit ), ARRAY_A );
+	}
+
+	/**
+	 * Change log for a run: register events the run recorded, and staff
+	 * changes and notes on the issues the run found, with rule and page.
+	 *
+	 * @param int $run_id Run ID.
+	 * @return array
+	 */
+	public function run_issue_events( $run_id ) {
+		global $wpdb;
+		return (array) $wpdb->get_results( $wpdb->prepare( "SELECT e.*, i.rule_id, i.page_url FROM {$this->t( 'events' )} e JOIN {$this->t( 'issues' )} i ON i.id = e.object_id WHERE e.object_type = 'issue' AND ( e.run_id = %d OR e.object_id IN ( SELECT DISTINCT issue_id FROM {$this->t( 'occurrences' )} WHERE run_id = %d ) ) ORDER BY e.id ASC", (int) $run_id, (int) $run_id ), ARRAY_A );
 	}
 
 	/* ---------------------------------------------------------------- Outbox */

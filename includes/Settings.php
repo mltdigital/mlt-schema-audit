@@ -266,6 +266,37 @@ class Settings {
 	}
 
 	/**
+	 * Confirm the current recipients on the current home URL, which lifts
+	 * the clone and staging pause (M3). Logged with the user and both URLs.
+	 *
+	 * @param int $user_id User.
+	 * @return bool Whether anything changed.
+	 */
+	public static function reconfirm_recipients( $user_id ) {
+		$s = self::all();
+		if ( empty( $s['recipients'] ) || ! self::mail_paused() ) {
+			return false;
+		}
+		$before                        = $s['recipients_home'];
+		$s['recipients_home']          = home_url( '/' );
+		$s['recipients_confirmed_by']  = (int) $user_id;
+		$s['recipients_confirmed_utc'] = gmdate( 'Y-m-d H:i:s' );
+		update_option( self::OPTION, $s, false );
+		self::flush();
+		( new Repository() )->log_event(
+			'recipients_reconfirmed',
+			array(
+				'from_home' => $before,
+				'to_home'   => $s['recipients_home'],
+				'count'     => count( $s['recipients'] ),
+			),
+			$user_id
+		);
+		Ops\Scheduler::sync();
+		return true;
+	}
+
+	/**
 	 * Value as written to the event log: lists of personal data are counted,
 	 * not copied (D2).
 	 *
