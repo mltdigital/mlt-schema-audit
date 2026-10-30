@@ -184,5 +184,23 @@ mltsa_test(
 		check_same( array( 'firm.example', 'resource:' . $img ), $evidence[ $url_key ], 'URL-004 evidence' );
 		check_same( array( $img => 'unchecked' ), SiteRules::resource_outcomes( $facts, array() ), 'Referenced but not checked' );
 		check_same( array( $img => 'ok' ), SiteRules::resource_outcomes( $facts, array( $img => 'ok', 'https://firm.example/old.png' => 'ok' ) ), 'Only resources a page read references' );
+		check_same(
+			array(
+				'referenced' => 5,
+				'attempted'  => 4,
+				'checked'    => 3,
+				'broken'     => 2,
+			),
+			SiteRules::resource_counts(
+				array(
+					'https://firm.example/a.png' => 'ok',
+					'https://firm.example/b.png' => 'not_found',
+					'https://firm.example/c.png' => 'gone',
+					'https://firm.example/d.png' => 'blocked',
+					'https://firm.example/e.png' => 'unchecked',
+				)
+			),
+			'Checked counts only answers; blocked is attempted, not checked'
+		);
 	}
 );

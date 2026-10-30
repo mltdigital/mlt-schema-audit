@@ -440,6 +440,35 @@ class SiteRules {
 	}
 
 	/**
+	 * Image and logo check counts for the run summary: referenced by a page
+	 * read, attempted (not over the cap or left unfinished), checked (an
+	 * answer received: found, 404 or 410) and broken (404 or 410).
+	 *
+	 * @param array $outcomes Resource URL => outcome, from resource_outcomes().
+	 * @return array
+	 */
+	public static function resource_counts( array $outcomes ) {
+		$counts = array(
+			'referenced' => count( $outcomes ),
+			'attempted'  => 0,
+			'checked'    => 0,
+			'broken'     => 0,
+		);
+		foreach ( $outcomes as $outcome ) {
+			if ( 'unchecked' !== $outcome ) {
+				++$counts['attempted'];
+			}
+			if ( in_array( $outcome, array( 'ok', 'not_found', 'gone' ), true ) ) {
+				++$counts['checked'];
+			}
+			if ( in_array( $outcome, array( 'not_found', 'gone' ), true ) ) {
+				++$counts['broken'];
+			}
+		}
+		return $counts;
+	}
+
+	/**
 	 * Display a stored value.
 	 *
 	 * @param string $field Field.

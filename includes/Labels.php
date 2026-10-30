@@ -101,6 +101,16 @@ class Labels {
 	);
 
 	/**
+	 * Image and logo check counts in the run summary.
+	 */
+	const RESOURCE_CHECKS = array(
+		'referenced' => 'Used by the pages read',
+		'attempted'  => 'Requested',
+		'checked'    => 'Checked (an answer received)',
+		'broken'     => 'Broken (404 or 410)',
+	);
+
+	/**
 	 * The coverage statement every report and screen carries (section 4).
 	 */
 	const COVERAGE_STATEMENT = 'Server-response JSON-LD audit. Microdata and RDFa are detected but not validated. Markup added by JavaScript after the page loads is not seen. "No JSON-LD detected" does not mean "no structured data".';

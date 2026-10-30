@@ -5,7 +5,9 @@
  * Threat model F1, F2, F6: only the site's own host (and its www/bare
  * variant), only ports 80, 443 or the home URL's own port, never admin,
  * login, XML-RPC or REST routes, never a private, loopback, link-local or
- * metadata address. Query strings are dropped by default.
+ * metadata address. Query strings are dropped by default. Image and logo
+ * checks (resources) may also request static files under /wp-content/ and
+ * /wp-includes/, never scripts.
  *
  * @package MLT\SchemaAudit
  */
@@ -70,14 +72,28 @@ class UrlPolicy {
 		'#^/xmlrpc\.php#i',
 		'#^/wp-json(/|$)#i',
 		'#^/wp-cron\.php#i',
-		'#^/wp-content/#i',
-		'#^/wp-includes/#i',
 		'#/feed/?$#i',
 		'#^/cart/?#i',
 		'#^/checkout/?#i',
 		'#^/my-account/?#i',
 		'#/(logout|log-out|sign-out)/?#i',
 	);
+
+	/**
+	 * WordPress code and upload folders: never requested as pages, but an
+	 * image or logo check may request a static file inside them.
+	 *
+	 * @var array
+	 */
+	private static $asset_paths = array(
+		'#^/wp-content/#i',
+		'#^/wp-includes/#i',
+	);
+
+	/**
+	 * File types an image or logo check may request inside the asset folders.
+	 */
+	const RESOURCE_EXTENSIONS = 'avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp|pdf|mp4|webm';
 
 	/**
 	 * Constructor.
@@ -176,10 +192,12 @@ class UrlPolicy {
 	/**
 	 * Check a URL against the request policy (not its address).
 	 *
-	 * @param string $url Absolute URL.
+	 * @param string $url         Absolute URL.
+	 * @param bool   $is_resource True for an image or logo check, which may
+	 *                            request static files in the asset folders.
 	 * @return array { ok: bool, reason: string }
 	 */
-	public function check_url( $url ) {
+	public function check_url( $url, $is_resource = false ) {
 		$parts = parse_url( (string) $url ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
 		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
 			return self::verdict( false, 'invalid_url' );
@@ -207,6 +225,11 @@ class UrlPolicy {
 		foreach ( array( rawurldecode( $raw ), self::canonical_path( $raw ) ) as $path ) {
 			foreach ( self::$denied_paths as $pattern ) {
 				if ( preg_match( $pattern, $path ) ) {
+					return self::verdict( false, 'denied_path' );
+				}
+			}
+			foreach ( self::$asset_paths as $pattern ) {
+				if ( preg_match( $pattern, $path ) && ! ( $is_resource && self::is_static_file( $path ) ) ) {
 					return self::verdict( false, 'denied_path' );
 				}
 			}
@@ -487,6 +510,19 @@ class UrlPolicy {
 		$path = str_replace( '\\', '/', $path );
 		$path = (string) preg_replace( '#/{2,}#', '/', $path );
 		return self::remove_dot_segments( $path );
+	}
+
+	/**
+	 * Whether a decoded path names a static file an image check may request:
+	 * an image, PDF or video extension at the end, and no script extension
+	 * anywhere (so run.php/a.png and a.php.png are refused).
+	 *
+	 * @param string $path Decoded path.
+	 * @return bool
+	 */
+	private static function is_static_file( $path ) {
+		return (bool) preg_match( '#\.(' . self::RESOURCE_EXTENSIONS . ')$#i', $path )
+			&& ! preg_match( '#\.(php\d*|phtml|phar|pht|phps|cgi|pl|py|sh|aspx?|jsp)(?![a-z0-9])#i', $path );
 	}
 
 	/**

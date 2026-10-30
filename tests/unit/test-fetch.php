@@ -245,3 +245,31 @@ mltsa_test(
 		check_same( 1, count( $client->requests ), 'no request made to the traversal target' );
 	}
 );
+
+mltsa_test(
+	'F6 review 2026-10-30: image checks may request static files under wp-content, never scripts, and pages never',
+	static function () {
+		$policy = mltsa_policy();
+		$base   = 'https://www.example-legal.co.uk';
+		foreach ( array( '/wp-content/uploads/2026/03/logo.png', '/wp-content/uploads/team.JPG', '/wp-content/themes/firm/img/logo.svg', '/wp-includes/images/w-logo-blue.png', '/wp-content/uploads/brochure.pdf', '/wp-content/uploads/logo.webp?ver=2' ) as $path ) {
+			check_same( true, $policy->check_url( $base . $path, true )['ok'], 'resource allowed ' . $path );
+			check_same( 'denied_path', $policy->check_url( $base . $path )['reason'], 'page fetch still refused ' . $path );
+		}
+		foreach ( array( '/wp-content/plugins/x/run.php', '/wp-content/plugins/x/run.php/a.png', '/wp-content/uploads/a.php.png', '/wp-content/uploads/a.phtml', '/wp-content/uploads/a.php%00.png', '/wp-content/uploads/', '/wp-content/uploads/a.png/..', '/wp-content/uploads/../plugins/x/run.php', '/wp-content/uploads/a%2ephp%2fb.png', '/wp-includes/ms-files.php', '/wp-admin/images/logo.png', '/wp-json/wp/v2/media.png' ) as $path ) {
+			check_same( 'denied_path', $policy->check_url( $base . $path, true )['reason'], 'resource refused ' . $path );
+		}
+		check_same( 'denied_query', $policy->check_url( $base . '/wp-content/uploads/a.png?action=delete', true )['reason'], 'side-effect query refused on a resource' );
+		check_same( 'off_site_host', $policy->check_url( 'https://cdn.example.net/wp-content/uploads/a.png', true )['reason'], 'other hosts still refused' );
+
+		$client = new Scripted_Client();
+		$client->responses[ $base . '/wp-content/uploads/logo.png' ] = array( 'status' => 200 );
+		$result = mltsa_fetcher( $client )->fetch( $base . '/wp-content/uploads/logo.png', 'HEAD', true );
+		check_same( 'ok', $result['outcome'], 'upload checked' );
+
+		$client = new Scripted_Client();
+		$client->responses[ $base . '/wp-content/uploads/old.png' ] = array( 'status' => 301, 'headers' => array( 'location' => $base . '/wp-content/plugins/x/run.php' ) );
+		$result = mltsa_fetcher( $client )->fetch( $base . '/wp-content/uploads/old.png', 'HEAD', true );
+		check_same( 'blocked', $result['outcome'], 'redirect from an image to a script refused' );
+		check_same( 1, count( $client->requests ), 'no request made to the script' );
+	}
+);

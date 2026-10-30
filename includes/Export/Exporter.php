@@ -168,6 +168,9 @@ class Exporter {
 		foreach ( isset( $summary['coverage'] ) ? (array) $summary['coverage'] : array() as $state => $n ) {
 			$rows[] = array( 'Pages: ' . Labels::of( Labels::COVERAGE, $state ), (int) $n );
 		}
+		foreach ( isset( $summary['resource_checks'] ) ? (array) $summary['resource_checks'] : array() as $key => $n ) {
+			$rows[] = array( 'Images and logos: ' . Labels::of( Labels::RESOURCE_CHECKS, $key ), (int) $n );
+		}
 		foreach ( isset( $summary['severity'] ) ? (array) $summary['severity'] : array() as $severity => $n ) {
 			$rows[] = array( 'Findings: ' . Labels::of( Labels::SEVERITIES, $severity ), (int) $n );
 		}

@@ -544,10 +544,10 @@ class Worker {
 		$total = count( $urls );
 		while ( $index < $total && microtime( true ) < $deadline && ! $this->should_stop( $run ) ) {
 			$url    = $urls[ $index ];
-			$result = $fetcher->fetch( $url, 'HEAD' );
+			$result = $fetcher->fetch( $url, 'HEAD', true );
 			++$this->requests;
 			if ( in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
-				$result = $fetcher->fetch( $url );
+				$result = $fetcher->fetch( $url, 'GET', true );
 				++$this->requests;
 			}
 			$summary['resource_outcomes'][ $url ] = $result['outcome'];
@@ -566,7 +566,6 @@ class Worker {
 		$summary['resources_broken'] = $broken;
 		$done                        = $index >= count( $urls );
 		if ( $done ) {
-			$summary['resources_checked'] = count( $urls );
 			unset( $summary['resources'] );
 		}
 		$this->repo->update_run(
@@ -691,6 +690,9 @@ class Worker {
 		$summary['severity']    = $this->repo->severity_counts( $run_id );
 		$summary['findings']    = count( $current );
 		$summary['is_baseline'] = $is_baseline;
+		if ( self::full_scope( $run ) ) {
+			$summary['resource_checks'] = SiteRules::resource_counts( $resources );
+		}
 		if ( $baseline && self::full_scope( $run ) ) {
 			$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage, $resources );
 		}

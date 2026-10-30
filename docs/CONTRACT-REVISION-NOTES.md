@@ -21,6 +21,7 @@ Proposed revision note for `01-PRODUCT-CONTRACT.md` (deliverable 1), to be appen
 | 15 | 9 | Reactivation rebuilds the next scheduled occurrence only | Deactivation also forgets when monitoring started, so a reactivation never runs a catch-up for a month missed while the plugin was off | A catch-up after reactivation would be a backlog run |
 | 16 | 5 | Rules per contract and plan | Rule set 2026.10.2: 52 rules. SITE-001 (same business @id with different details on different pages) is a review, not a fail, as the defect catalogue requires. ID-003 (reference to an undefined entity) is judged across the site, not per page | Fixture set from the July and August evidence |
 | 17 | 7 | Each CSV downloads on its own | As specified, plus: every cell quoted, UTF-8 with a byte-order mark, and the ZIP built in memory by the plugin's own writer | `ZipArchive` needs a file on disk, which section 1 forbids |
+| 18 | 4, F6 | Never request admin, login, XML-RPC or REST routes; the build also refused all of `/wp-content/` and `/wp-includes/` | Page fetches still refuse both folders. Image and logo checks (URL-004) may request static image, PDF and video files there (extension at the end of the path, no script extension anywhere in it), checked on every redirect hop | Otherwise no image in the media library is ever checked, so URL-004 cannot work on a WordPress site (review finding 3, 30 October 2026) |
 
 ## Still open (Input needed in the contract)
 

@@ -82,11 +82,12 @@ class Fetcher {
 	 * Outcomes: ok, blocked, timeout, too_large, http_error, not_found, gone,
 	 * unavailable, redirect_limit, error.
 	 *
-	 * @param string $url    Absolute URL.
-	 * @param string $method GET or HEAD.
+	 * @param string $url         Absolute URL.
+	 * @param string $method      GET or HEAD.
+	 * @param bool   $is_resource True for an image or logo check (wider path policy, every hop).
 	 * @return array
 	 */
-	public function fetch( $url, $method = 'GET' ) {
+	public function fetch( $url, $method = 'GET', $is_resource = false ) {
 		$started = microtime( true );
 		$result  = array(
 			'requested_url' => (string) $url,
@@ -105,7 +106,7 @@ class Fetcher {
 
 		$current = (string) $url;
 		for ( $hop = 0; $hop <= (int) $this->limits['max_redirects']; $hop++ ) {
-			$check = $this->policy->check_url( $current );
+			$check = $this->policy->check_url( $current, $is_resource );
 			if ( ! $check['ok'] ) {
 				return $this->finish( $result, 'blocked', $check['reason'], $started );
 			}
