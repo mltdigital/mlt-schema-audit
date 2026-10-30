@@ -1,0 +1,7 @@
+.dev/
+vendor/
+build/
+dist/
+*.zip
+.DS_Store
+.phpcs-cache
