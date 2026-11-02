@@ -153,8 +153,8 @@ class WpHttpClient implements HttpClient {
 		$body = (string) wp_remote_retrieve_body( $response );
 		$cap  = (int) $args['max_bytes'];
 
-		$result['status']    = (int) wp_remote_retrieve_response_code( $response );
-		$result['headers']   = $headers;
+		$result['status']  = (int) wp_remote_retrieve_response_code( $response );
+		$result['headers'] = $headers;
 		// A HEAD response has no body: its Content-Length is the file's size,
 		// not bytes received, so it never makes the response "too large"
 		// (branch review R3). The cap applies to GET bodies.
