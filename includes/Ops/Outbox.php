@@ -81,9 +81,32 @@ class Outbox {
 			) ? 1 : 0;
 		}
 		if ( $queued ) {
-			wp_schedule_single_event( time(), Scheduler::OUTBOX_HOOK );
+			self::schedule_next();
 		}
 		return $queued;
+	}
+
+	/**
+	 * Keep one outbox event queued at the moment the outbox next has work
+	 * (finding 5). Without it a retry set for later waited for whatever
+	 * cron event came next. An event already queued at or before that
+	 * moment is kept: it reschedules when it runs.
+	 *
+	 * @return int|null Time of the queued event, or null when nothing is due.
+	 */
+	public static function schedule_next() {
+		$next = ( new Repository() )->outbox_next_due();
+		if ( null === $next ) {
+			return null;
+		}
+		$at     = max( time(), $next );
+		$queued = wp_next_scheduled( Scheduler::OUTBOX_HOOK );
+		if ( $queued && $queued <= $at ) {
+			return (int) $queued;
+		}
+		wp_clear_scheduled_hook( Scheduler::OUTBOX_HOOK );
+		wp_schedule_single_event( $at, Scheduler::OUTBOX_HOOK );
+		return $at;
 	}
 
 	/**
@@ -127,6 +150,9 @@ class Outbox {
 					)
 				) ? 1 : 0;
 			}
+		}
+		if ( $added ) {
+			self::schedule_next();
 		}
 		if ( $cancelled || $added ) {
 			$repo->log_event(
@@ -189,6 +215,8 @@ class Outbox {
 
 		$blocked = self::blocked_reason();
 		if ( '' !== $blocked ) {
+			// No event is queued while blocked, or it would fire on every
+			// cron run. Lifting the block, or the hourly watchdog, queues one.
 			$stats['blocked'] = $blocked;
 			update_option( 'mltsa_mail_blocked', $blocked, false );
 			return $stats;
@@ -196,10 +224,7 @@ class Outbox {
 		delete_option( 'mltsa_mail_blocked' );
 
 		$hash = self::recipients_hash( (array) Settings::get( 'recipients' ) );
-		foreach ( $repo->outbox_in( array( 'pending' ), $limit ) as $row ) {
-			if ( (int) $row['not_before'] > time() ) {
-				continue;
-			}
+		foreach ( $repo->outbox_due( time(), $limit ) as $row ) {
 			if ( $row['recipients_hash'] !== $hash ) {
 				$repo->update_outbox(
 					(int) $row['id'],
@@ -252,6 +277,7 @@ class Outbox {
 			);
 			++$stats['failed'];
 		}
+		self::schedule_next();
 		return $stats;
 	}
 

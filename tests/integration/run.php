@@ -412,6 +412,58 @@ itest(
 );
 
 itest(
+	'Finding 5 the outbox queues its own event at the earliest retry, due rows are not crowded out, and a block queues nothing until lifted',
+	static function () use ( $admin ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'mltsa_outbox';
+		$wpdb->query( "UPDATE {$table} SET state = 'cancelled', last_error = 'test_isolation' WHERE state IN ('pending', 'sending')" );
+		wp_clear_scheduled_hook( Scheduler::OUTBOX_HOOK );
+		icheck( null === Outbox::schedule_next() && false === wp_next_scheduled( Scheduler::OUTBOX_HOOK ), 'Nothing pending, no outbox event' );
+
+		// Both sends fail: the retry is five minutes out and the event follows it.
+		$run = make_finished_monthly( array( 'comparison' => array( 'meaningful' => true ), 'coverage' => array( 'ok' => 10 ) ) );
+		Outbox::queue_for_run( $run );
+		icheck( wp_next_scheduled( Scheduler::OUTBOX_HOOK ) <= time(), 'Queuing schedules an immediate send' );
+		wp_clear_scheduled_hook( Scheduler::OUTBOX_HOOK ); // As wp-cron does before it runs the event.
+		$before                   = time();
+		$GLOBALS['dev_mail_fail'] = true;
+		Outbox::process();
+		unset( $GLOBALS['dev_mail_fail'] );
+		$retry = (int) $wpdb->get_var( $wpdb->prepare( "SELECT MIN(not_before) FROM {$table} WHERE run_id = %d AND state = 'pending'", $run['id'] ) );
+		icheck( $retry >= $before + 300, 'Retry set five minutes out' );
+		icheck( wp_next_scheduled( Scheduler::OUTBOX_HOOK ) === $retry, 'Outbox event at the earliest retry: ' . wp_next_scheduled( Scheduler::OUTBOX_HOOK ) . ' vs ' . $retry );
+
+		// Rows waiting for a retry have lower IDs; a due row still goes first.
+		$run2 = make_finished_monthly( array( 'comparison' => array( 'meaningful' => true ), 'coverage' => array( 'ok' => 10 ) ) );
+		Outbox::queue_for_run( $run2 );
+		wp_clear_scheduled_hook( Scheduler::OUTBOX_HOOK );
+		$mails = count( mail_log() );
+		$stats = Outbox::process( 1 );
+		icheck( 1 === $stats['submitted'] && count( mail_log() ) === $mails + 1, 'Due row sent with limit 1: ' . wp_json_encode( $stats ) );
+		icheck( wp_next_scheduled( Scheduler::OUTBOX_HOOK ) <= time(), 'Another due row: event queued for now' );
+
+		// Kill switch: no event while blocked; lifting it queues one.
+		Settings::update( array( 'kill_switch' => true ), $admin );
+		wp_clear_scheduled_hook( Scheduler::OUTBOX_HOOK );
+		$stats = Outbox::process();
+		icheck( 'kill_switch' === $stats['blocked'] && false === wp_next_scheduled( Scheduler::OUTBOX_HOOK ), 'Blocked: no event queued' );
+		Settings::update( array( 'kill_switch' => false ), $admin );
+		icheck( wp_next_scheduled( Scheduler::OUTBOX_HOOK ) <= time(), 'Lifting the kill switch queues an event' );
+		wp_clear_scheduled_hook( Scheduler::OUTBOX_HOOK );
+		$stats = Outbox::process();
+		icheck( 1 === $stats['submitted'], 'Waiting row sent once unblocked' );
+
+		// A lost event is put back by the hourly watchdog.
+		wp_clear_scheduled_hook( Scheduler::OUTBOX_HOOK );
+		Scheduler::on_watchdog();
+		icheck( wp_next_scheduled( Scheduler::OUTBOX_HOOK ) === $retry, 'Watchdog requeues the outbox event at the retry' );
+
+		$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET state = 'cancelled', last_error = 'test_cleanup' WHERE run_id = %d AND state = 'pending'", $run['id'] ) );
+		wp_clear_scheduled_hook( Scheduler::OUTBOX_HOOK );
+	}
+);
+
+itest(
 	'AC a recipient change before an unsent notification cancels and rebuilds it for the current list, logged',
 	static function () use ( $admin ) {
 		global $wpdb;

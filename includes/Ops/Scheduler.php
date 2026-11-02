@@ -88,6 +88,7 @@ class Scheduler {
 			$repo->log_event( 'worker_restarted', array( 'by' => 'watchdog' ), 0, 'run', (int) $run['id'], (int) $run['id'] );
 			self::kick_worker( 0 );
 		}
+		Outbox::schedule_next();
 	}
 
 	/**

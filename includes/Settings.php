@@ -258,6 +258,8 @@ class Settings {
 			$repo->log_event( $event, $changed, $user_id );
 		}
 		Ops\Scheduler::sync();
+		// A lifted kill switch or new recipients may unblock waiting mail.
+		Ops\Outbox::schedule_next();
 
 		return array(
 			'saved'  => true,
@@ -293,6 +295,7 @@ class Settings {
 			$user_id
 		);
 		Ops\Scheduler::sync();
+		Ops\Outbox::schedule_next();
 		return true;
 	}
 

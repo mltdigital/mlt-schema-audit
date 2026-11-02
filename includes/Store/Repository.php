@@ -746,6 +746,32 @@ class Repository {
 	}
 
 	/**
+	 * Pending outbox rows that are due now, earliest first, so rows waiting
+	 * for a retry never crowd due rows out of the limit (finding 5).
+	 *
+	 * @param int $now   Unix time.
+	 * @param int $limit Limit.
+	 * @return array
+	 */
+	public function outbox_due( $now, $limit = 20 ) {
+		global $wpdb;
+		return (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$this->t( 'outbox' )} WHERE state = 'pending' AND not_before <= %d ORDER BY not_before ASC, id ASC LIMIT %d", (int) $now, (int) $limit ), ARRAY_A );
+	}
+
+	/**
+	 * When the outbox next has work: the earliest pending not_before, or the
+	 * moment the earliest sending claim expires (so an interrupted send is
+	 * marked delivery_unknown). Null when there is nothing to do.
+	 *
+	 * @return int|null Unix time.
+	 */
+	public function outbox_next_due() {
+		global $wpdb;
+		$next = $wpdb->get_var( "SELECT MIN(t) FROM ( SELECT MIN(not_before) AS t FROM {$this->t( 'outbox' )} WHERE state = 'pending' UNION ALL SELECT MIN(claimed_until) + 1 AS t FROM {$this->t( 'outbox' )} WHERE state = 'sending' ) AS due" );
+		return null === $next ? null : (int) $next;
+	}
+
+	/**
 	 * Atomically claim one pending outbox row (M6): pending to sending, with
 	 * a token, only if nobody else holds it.
 	 *
