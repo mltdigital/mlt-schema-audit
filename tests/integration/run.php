@@ -969,6 +969,31 @@ itest(
 	}
 );
 
+itest(
+	'Argon BUG-3 check: the size cap counts decompressed bytes, so a small gzip body of a page under the cap is not truncated',
+	static function () {
+		// cURL decodes the body before the HTTP API's write callback counts
+		// it (CURLOPT_ENCODING ''), so limit_response_size and strlen() both
+		// measure the decompressed page.
+		$probe = ABSPATH . 'mltsa-gzip-probe.php';
+		file_put_contents( $probe, "<?php\n\$n = (int) \$_GET['n'];\n\$gz = gzencode( '<html><body>' . str_repeat( 'a', \$n - 26 ) . '</body></html>', 9 );\nheader( 'Content-Type: text/html' );\nheader( 'Content-Encoding: gzip' );\nheader( 'Content-Length: ' . strlen( \$gz ) );\necho \$gz;\n" );
+		try {
+			$client = new MLT\SchemaAudit\Engine\WpHttpClient();
+			$cap    = 5242880;
+			$args   = array( 'timeout' => 20, 'max_bytes' => $cap, 'user_agent' => 'mltsa-test' );
+			$small  = $client->request( home_url( '/mltsa-gzip-probe.php?n=4000000' ), '127.0.0.1', $args );
+			icheck( 200 === $small['status'] && $small['pinned'], 'Probe answered through the pinned connection: ' . $small['error'] );
+			icheck( 'gzip' === $small['headers']['content-encoding'] && (int) $small['headers']['content-length'] < 100000, 'Sent compressed: ' . $small['headers']['content-length'] );
+			icheck( 4000000 === strlen( $small['body'] ) && false === $small['truncated'], 'A 4,000,000 byte page arrives whole: ' . strlen( $small['body'] ) );
+			$big = $client->request( home_url( '/mltsa-gzip-probe.php?n=6000000' ), '127.0.0.1', $args );
+			icheck( $cap === strlen( $big['body'] ) && true === $big['truncated'], 'A 6,000,000 byte page is cut at the cap: ' . strlen( $big['body'] ) );
+			icheck( (int) $big['headers']['content-length'] < $cap, 'Even though its compressed size is far under the cap' );
+		} finally {
+			unlink( $probe );
+		}
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }
