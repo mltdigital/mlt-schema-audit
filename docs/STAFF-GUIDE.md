@@ -92,7 +92,8 @@ Recipients are confirmed against the site's address. If the address changes, all
 
 ## Stopping it quickly
 
-- **Kill switch setting** (Settings): stops scheduling and mail now, and cancels a monthly audit in progress. Manual audits still work.
+- **Kill switch setting** (Settings): stops scheduling and mail now, and cancels a monthly audit in progress. An audit that has already updated the issue register is left to finish (its email is still held). Manual audits still work.
+- **Cancel** (audit screen): stops the audit in progress. Once an audit has updated the issue register it can no longer be cancelled: it is finishing, and the screen says nothing was cancelled. A cancel that arrives while the register is being updated undoes that update.
 - **`define( 'MLTSA_DISABLE', true );`** in `wp-config.php`: stops scheduling, mail and manual audits. Use this across many sites at once.
 
 ## Health screen

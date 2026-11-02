@@ -1169,7 +1169,7 @@ function cancel_like_admin( $id ) {
 }
 
 itest(
-	'Argon BUG-5: a cancel issued while the worker is part way through a step wins, in the fetch phase and in the final step',
+	'Argon BUG-5: a cancel issued while the worker is part way through a step wins in the fetch phase; in the final step it is refused (R4)',
 	static function () use ( $admin, $hostile_url ) {
 		global $wpdb;
 		$repo = new Repository();
@@ -1198,8 +1198,10 @@ itest(
 		icheck( 'cancelled' === $run['state'] && 'done' === $run['phase'], 'Fetch phase: ' . $run['state'] . '/' . $run['phase'] );
 		$requests = $client->count;
 
-		// 2. Cancel while the final step is running: the worker must not
-		// write complete over it, nor log the run as finished.
+		// 2. Cancel while the final step is running: the register has been
+		// written, so the cancel is refused and the run completes as one
+		// (branch review R4; before, the cancel won and the register kept a
+		// cancelled run's changes).
 		finish_active_runs();
 		$id    = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
 		$fired = false;
@@ -1209,7 +1211,7 @@ itest(
 				$fired = true;
 				$phase = $wpdb->get_var( $wpdb->prepare( "SELECT phase FROM {$wpdb->prefix}mltsa_runs WHERE id = %d", $id ) );
 				if ( 'notify' === $phase ) {
-					cancel_like_admin( $id );
+					icheck( false === ( new Repository() )->cancel_run( $id ), 'Cancel refused once the register is written' );
 				} else {
 					$fired = false;
 				}
@@ -1224,9 +1226,9 @@ itest(
 		}
 		$run = $repo->get_run( $id );
 		icheck( $fired, 'The cancel was issued during the final step' );
-		icheck( 'cancelled' === $run['state'] && 'done' === $run['phase'], 'Final step: ' . $run['state'] . '/' . $run['phase'] );
+		icheck( 'complete' === $run['state'] && 'done' === $run['phase'], 'Final step: ' . $run['state'] . '/' . $run['phase'] );
 		$finished = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->prefix}mltsa_events WHERE event_type = 'run_finished' AND run_id = %d", $id ) );
-		icheck( 0 === $finished, 'No run_finished event for a cancelled run: ' . $finished );
+		icheck( 1 === $finished, 'Logged as finished once: ' . $finished );
 		icheck( 1 === $requests, 'No request after the cancel in the fetch phase: ' . $requests );
 
 		// 3. The other way round: a cancel that arrives after the run
@@ -1657,6 +1659,119 @@ itest(
 		( new Worker( $client, static function () {} ) )->process( $id, 5 );
 		remove_filter( 'query', $capture );
 		icheck( false !== strpos( stripslashes( $written ), 'r3-big-logo.png":"ok"' ), 'GET fallback 200 over the cap recorded as ok: ' . substr( $written, 0, 300 ) );
+		finish_active_runs();
+	}
+);
+
+itest(
+	'Branch review R4: a cancel during reconcile rolls the step back, so a cancelled run leaves the register unchanged; a killed reconcile leaves nothing half written',
+	static function () use ( $admin ) {
+		global $wpdb;
+		$repo   = new Repository();
+		$issues = Installer::table( 'issues' );
+		$events = Installer::table( 'events' );
+		$occ    = Installer::table( 'occurrences' );
+		$client = new class() implements MLT\SchemaAudit\Engine\HttpClient {
+			public function request( $url, $pinned_ip, array $args ) {
+				// FACT-001 style finding: an Organization with no name, so the
+				// recheck has a page issue to reconcile.
+				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'text/html' ), 'body' => '<html><head><script type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService","telephone":"01632 960123"}</script></head><body></body></html>', 'truncated' => false, 'pinned' => true );
+			}
+		};
+		$snapshot = static function ( $id ) use ( $wpdb, $issues, $events, $occ ) {
+			return array(
+				'issues' => md5( serialize( $wpdb->get_results( "SELECT * FROM {$issues} ORDER BY id", ARRAY_N ) ) ),
+				'events' => (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$events} WHERE run_id = %d", $id ) ),
+				'linked' => (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$occ} WHERE run_id = %d AND issue_id > 0", $id ) ),
+			);
+		};
+		// Run to the reconcile step.
+		$to_reconcile = static function () use ( $admin, $repo, $client ) {
+			finish_active_runs();
+			reset_settings( array( 'timeout' => 15 ) );
+			$id = Scheduler::start_recheck( $admin, array( home_url( '/r4-reconcile-test/' ) ) );
+			$repo->update_run( $id, array( 'state' => 'running' ) );
+			for ( $i = 0; $i < 10 && 'reconcile' !== $repo->get_run( $id )['phase']; $i++ ) {
+				$w    = new Worker( $client, static function () {} );
+				$step = new ReflectionMethod( $w, 'step' );
+				$step->setAccessible( true );
+				$step->invoke( $w, $repo->get_run( $id ), microtime( true ) + 60 );
+			}
+			return $id;
+		};
+
+		// 1. A cancel from another connection (the audit screen) arrives
+		// after reconcile has started.
+		$id = $to_reconcile();
+		icheck( 'reconcile' === $repo->get_run( $id )['phase'], 'Run reached reconcile' );
+		$occurrences = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$occ} WHERE run_id = %d", $id ) );
+		icheck( $occurrences > 0, 'The page has findings to reconcile: ' . $occurrences );
+		$before = $snapshot( $id );
+		$fired  = false;
+		$is_register_write = static function ( $query ) use ( $issues, $occ ) {
+			return (bool) preg_match( '/^\s*(INSERT INTO|UPDATE)\s+`?(' . preg_quote( $issues, '/' ) . '|' . preg_quote( $occ, '/' ) . ')`?\s/', $query );
+		};
+		$hook   = static function ( $query ) use ( $id, $is_register_write, &$fired ) {
+			if ( ! $fired && $is_register_write( $query ) ) {
+				$fired = true;
+				$other = new PDO( 'sqlite:' . FQDB, null, null, array( PDO::ATTR_TIMEOUT => 2 ) );
+				$other->exec( "UPDATE " . Installer::table( 'runs' ) . " SET state = 'cancelled', phase = 'done' WHERE id = " . (int) $id . " AND state IN ('queued','running') AND phase <> 'notify'" );
+				$other = null;
+			}
+			return $query;
+		};
+		add_filter( 'query', $hook );
+		try {
+			( new Worker( $client, static function () {} ) )->process( $id, 60 );
+		} finally {
+			remove_filter( 'query', $hook );
+		}
+		$run = $repo->get_run( $id );
+		icheck( $fired, 'The cancel landed during the register writes' );
+		icheck( 'cancelled' === $run['state'] && 'done' === $run['phase'], 'Run stays cancelled: ' . $run['state'] . '/' . $run['phase'] );
+		icheck( $before === $snapshot( $id ), 'Register unchanged by the cancelled run: ' . wp_json_encode( array( $before, $snapshot( $id ) ) ) );
+
+		// 2. A worker killed part way through reconcile: nothing half
+		// written; the next slice reconciles once.
+		$id     = $to_reconcile();
+		$before = $snapshot( $id );
+		$writes = 0;
+		$die    = static function ( $query ) use ( $is_register_write, &$writes ) {
+			// Let the first register write through, then kill the worker.
+			if ( $is_register_write( $query ) && ++$writes >= 2 ) {
+				throw new RuntimeException( 'killed in reconcile' );
+			}
+			return $query;
+		};
+		add_filter( 'query', $die );
+		try {
+			( new Worker( $client, static function () {} ) )->process( $id, 60 );
+			icheck( false, 'The worker should have died' );
+		} catch ( RuntimeException $e ) {
+			icheck( 'killed in reconcile' === $e->getMessage(), 'Died in reconcile' );
+		} finally {
+			remove_filter( 'query', $die );
+		}
+		icheck( $before === $snapshot( $id ), 'Nothing written by the killed step: ' . wp_json_encode( array( $before, $snapshot( $id ) ) ) );
+		$repo->update_run( $id, array( 'lock_token' => '' ) );
+		( new Worker( $client, static function () {} ) )->process( $id, 60 );
+		$run = $repo->get_run( $id );
+		icheck( 'complete' === $run['state'], 'Retry completes: ' . $run['state'] );
+		$after = $snapshot( $id );
+		icheck( $after['linked'] > 0 && $before['issues'] !== $after['issues'], 'Register written once by the retry: ' . wp_json_encode( $after ) );
+
+		// 3. The kill switch reaching a monthly run that has written the
+		// register: it finishes, and the outbox holds its mail.
+		finish_active_runs();
+		$mid = $repo->create_run( array( 'run_type' => 'monthly', 'trigger_type' => 'system', 'schedule_key' => 'r4-' . wp_generate_password( 8, false ), 'state' => 'running', 'phase' => 'notify', 'url_count' => 1, 'summary' => (string) wp_json_encode( array( 'findings' => 0 ) ) ) );
+		Settings::update( array( 'kill_switch' => true ), $admin );
+		try {
+			( new Worker( $client, static function () {} ) )->process( $mid, 60 );
+		} finally {
+			Settings::update( array( 'kill_switch' => false ), $admin );
+		}
+		$run = $repo->get_run( $mid );
+		icheck( 'cancelled' !== $run['state'] && 'done' === $run['phase'], 'Kill switch after reconcile: run finishes, ' . $run['state'] . '/' . $run['phase'] );
 		finish_active_runs();
 	}
 );

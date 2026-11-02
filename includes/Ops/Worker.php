@@ -221,7 +221,10 @@ class Worker {
 				$run = $this->repo->get_run( $run_id );
 			}
 			while ( $run && 'running' === $run['state'] && microtime( true ) < $deadline ) {
-				if ( $this->should_stop( $run ) ) {
+				// A run that has written the register (phase notify) finishes,
+				// as for a cancel from the screen; the outbox still holds its
+				// mail while the switch is on (branch review R4).
+				if ( 'notify' !== $run['phase'] && $this->should_stop( $run ) ) {
 					$this->finish( $run, 'cancelled', array( 'cancelled_reason' => 'kill_switch' ) );
 					break;
 				}
@@ -793,114 +796,131 @@ class Worker {
 		$now         = Repository::now();
 		$is_baseline = empty( $prior );
 
-		foreach ( $result['insert'] as $key => $fields ) {
-			$occ = $current[ $key ];
-			$id  = $this->repo->insert_issue(
+		// The register writes and the move to notify are one transaction,
+		// committed only if the run is still running when it moves on: a
+		// cancel saved meanwhile rolls the step back (branch review R4).
+		// Once committed, the run can no longer be cancelled (cancel_run).
+		$this->repo->begin();
+		try {
+			foreach ( $result['insert'] as $key => $fields ) {
+				$occ = $current[ $key ];
+				$id  = $this->repo->insert_issue(
+					array(
+						'issue_key'            => $key,
+						'page_url'             => $occ['site_wide'] ? '' : substr( $occ['page_url'], 0, 2048 ),
+						'site_wide'            => (int) $occ['site_wide'],
+						'rule_id'              => $occ['rule_id'],
+						'rule_version'         => (int) $occ['rule_version'],
+						'severity'             => $occ['severity'],
+						'entity_key'           => $occ['entity_key'],
+						'property'             => $occ['property'],
+						'first_run_id'         => $run_id,
+						'last_run_id'          => $run_id,
+						'first_observed_utc'   => $now,
+						'last_observed_utc'    => $now,
+						'verification_state'   => $fields['verification_state'],
+						'verification_run_id'  => $run_id,
+						'change_reason'        => $fields['change_reason'],
+						'observed_hash'        => $fields['observed_hash'],
+						'latest_occurrence_id' => (int) $occ['id'],
+						'evidence'             => self::evidence_json( $occ, $evidence ),
+						'work_status'          => 'open',
+						'updated_utc'          => $now,
+					)
+				);
+				$this->repo->link_occurrences( $run_id, $key, $id );
+				if ( ! $is_baseline ) {
+					$this->repo->log_event( 'detected', array( 'reason' => $fields['change_reason'] ), 0, 'issue', $id, $run_id );
+				}
+			}
+
+			foreach ( $result['update'] as $key => $fields ) {
+				$issue = $issues[ $key ];
+				if ( isset( $current[ $key ] ) ) {
+					$fields['last_run_id']          = $run_id;
+					$fields['last_observed_utc']    = $now;
+					$fields['latest_occurrence_id'] = (int) $current[ $key ]['id'];
+					$fields['severity']             = $current[ $key ]['severity'];
+					if ( $current[ $key ]['site_wide'] ) {
+						$fields['evidence'] = self::evidence_json( $current[ $key ], $evidence );
+					}
+					$this->repo->link_occurrences( $run_id, $key, (int) $issue['id'] );
+				}
+				if ( isset( $fields['verification_state'] ) ) {
+					$fields['verification_run_id'] = $run_id;
+					if ( $fields['verification_state'] !== $issue['verification_state'] ) {
+						$this->repo->log_event(
+							'verification',
+							array(
+								'from' => $issue['verification_state'],
+								'to'   => $fields['verification_state'],
+							),
+							0,
+							'issue',
+							(int) $issue['id'],
+							$run_id
+						);
+					}
+				}
+				$this->repo->update_issue( (int) $issue['id'], $fields );
+			}
+			foreach ( $result['events'] as $event ) {
+				list( $key, $type, $message ) = $event;
+				if ( isset( $issues[ $key ] ) ) {
+					$this->repo->log_event( $type, array( 'message' => $message ), 0, 'issue', (int) $issues[ $key ]['id'], $run_id );
+				}
+			}
+
+			// Coverage figure (read-only): how many audits in a row each issue
+			// has been held as unavailable, so repeated "unavailable" shows up
+			// as a coverage problem and not as quiet stability.
+			$unavailable_ids = array();
+			foreach ( $result['unavailable'] as $key ) {
+				$unavailable_ids[] = (int) $issues[ $key ]['id'];
+			}
+			$still = array();
+			foreach ( $issues as $key => $issue ) {
+				$state = isset( $result['update'][ $key ]['verification_state'] ) ? $result['update'][ $key ]['verification_state'] : $issue['verification_state'];
+				if ( 'unavailable' === $state && ! isset( $current[ $key ] ) ) {
+					$still[] = (int) $issue['id'];
+				}
+			}
+			$previous                       = $this->repo->previous_finished_summary( $run_id );
+			$streaks                        = Comparator::unavailable_streaks( isset( $previous['unavailable_streaks'] ) ? (array) $previous['unavailable_streaks'] : array(), $unavailable_ids, $still );
+			$summary['unavailable_streaks'] = $streaks;
+			$summary['repeat_unavailable']  = Comparator::repeat_unavailable( $streaks, $unavailable_ids );
+
+			unset( $summary['resource_outcomes'] );
+			$summary['register']    = $result['summary'];
+			$summary['coverage']    = $this->repo->coverage_counts( $run_id );
+			$summary['severity']    = $this->repo->severity_counts( $run_id );
+			$summary['findings']    = count( $current );
+			$summary['is_baseline'] = $is_baseline;
+			if ( self::full_scope( $run ) ) {
+				$summary['resource_checks'] = SiteRules::resource_counts( $resources );
+			}
+			if ( $baseline && self::full_scope( $run ) ) {
+				$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage, $resources, $gone );
+			}
+			$saved = $this->save_run(
+				$run_id,
 				array(
-					'issue_key'            => $key,
-					'page_url'             => $occ['site_wide'] ? '' : substr( $occ['page_url'], 0, 2048 ),
-					'site_wide'            => (int) $occ['site_wide'],
-					'rule_id'              => $occ['rule_id'],
-					'rule_version'         => (int) $occ['rule_version'],
-					'severity'             => $occ['severity'],
-					'entity_key'           => $occ['entity_key'],
-					'property'             => $occ['property'],
-					'first_run_id'         => $run_id,
-					'last_run_id'          => $run_id,
-					'first_observed_utc'   => $now,
-					'last_observed_utc'    => $now,
-					'verification_state'   => $fields['verification_state'],
-					'verification_run_id'  => $run_id,
-					'change_reason'        => $fields['change_reason'],
-					'observed_hash'        => $fields['observed_hash'],
-					'latest_occurrence_id' => (int) $occ['id'],
-					'evidence'             => self::evidence_json( $occ, $evidence ),
-					'work_status'          => 'open',
-					'updated_utc'          => $now,
+					'phase'           => 'notify',
+					'baseline_run_id' => $baseline ? (int) $baseline['id'] : 0,
+					'summary'         => (string) wp_json_encode( $summary ),
 				)
 			);
-			$this->repo->link_occurrences( $run_id, $key, $id );
-			if ( ! $is_baseline ) {
-				$this->repo->log_event( 'detected', array( 'reason' => $fields['change_reason'] ), 0, 'issue', $id, $run_id );
-			}
+		} catch ( \Throwable $e ) {
+			$this->repo->rollback();
+			throw $e;
 		}
-
-		foreach ( $result['update'] as $key => $fields ) {
-			$issue = $issues[ $key ];
-			if ( isset( $current[ $key ] ) ) {
-				$fields['last_run_id']          = $run_id;
-				$fields['last_observed_utc']    = $now;
-				$fields['latest_occurrence_id'] = (int) $current[ $key ]['id'];
-				$fields['severity']             = $current[ $key ]['severity'];
-				if ( $current[ $key ]['site_wide'] ) {
-					$fields['evidence'] = self::evidence_json( $current[ $key ], $evidence );
-				}
-				$this->repo->link_occurrences( $run_id, $key, (int) $issue['id'] );
-			}
-			if ( isset( $fields['verification_state'] ) ) {
-				$fields['verification_run_id'] = $run_id;
-				if ( $fields['verification_state'] !== $issue['verification_state'] ) {
-					$this->repo->log_event(
-						'verification',
-						array(
-							'from' => $issue['verification_state'],
-							'to'   => $fields['verification_state'],
-						),
-						0,
-						'issue',
-						(int) $issue['id'],
-						$run_id
-					);
-				}
-			}
-			$this->repo->update_issue( (int) $issue['id'], $fields );
+		if ( $saved ) {
+			$this->repo->commit();
+		} else {
+			// Cancelled while reconciling: none of this step's register
+			// writes stand, so a cancelled run never changes the register.
+			$this->repo->rollback();
 		}
-		foreach ( $result['events'] as $event ) {
-			list( $key, $type, $message ) = $event;
-			if ( isset( $issues[ $key ] ) ) {
-				$this->repo->log_event( $type, array( 'message' => $message ), 0, 'issue', (int) $issues[ $key ]['id'], $run_id );
-			}
-		}
-
-		// Coverage figure (read-only): how many audits in a row each issue
-		// has been held as unavailable, so repeated "unavailable" shows up
-		// as a coverage problem and not as quiet stability.
-		$unavailable_ids = array();
-		foreach ( $result['unavailable'] as $key ) {
-			$unavailable_ids[] = (int) $issues[ $key ]['id'];
-		}
-		$still = array();
-		foreach ( $issues as $key => $issue ) {
-			$state = isset( $result['update'][ $key ]['verification_state'] ) ? $result['update'][ $key ]['verification_state'] : $issue['verification_state'];
-			if ( 'unavailable' === $state && ! isset( $current[ $key ] ) ) {
-				$still[] = (int) $issue['id'];
-			}
-		}
-		$previous                       = $this->repo->previous_finished_summary( $run_id );
-		$streaks                        = Comparator::unavailable_streaks( isset( $previous['unavailable_streaks'] ) ? (array) $previous['unavailable_streaks'] : array(), $unavailable_ids, $still );
-		$summary['unavailable_streaks'] = $streaks;
-		$summary['repeat_unavailable']  = Comparator::repeat_unavailable( $streaks, $unavailable_ids );
-
-		unset( $summary['resource_outcomes'] );
-		$summary['register']    = $result['summary'];
-		$summary['coverage']    = $this->repo->coverage_counts( $run_id );
-		$summary['severity']    = $this->repo->severity_counts( $run_id );
-		$summary['findings']    = count( $current );
-		$summary['is_baseline'] = $is_baseline;
-		if ( self::full_scope( $run ) ) {
-			$summary['resource_checks'] = SiteRules::resource_counts( $resources );
-		}
-		if ( $baseline && self::full_scope( $run ) ) {
-			$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage, $resources, $gone );
-		}
-		$this->save_run(
-			$run_id,
-			array(
-				'phase'           => 'notify',
-				'baseline_run_id' => $baseline ? (int) $baseline['id'] : 0,
-				'summary'         => (string) wp_json_encode( $summary ),
-			)
-		);
 	}
 
 	/**

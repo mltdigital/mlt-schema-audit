@@ -155,15 +155,42 @@ class Repository {
 
 	/**
 	 * Cancel a run that is still queued or running. A run that finished
-	 * meanwhile keeps its outcome.
+	 * meanwhile keeps its outcome, and so does one that has already written
+	 * its results to the issue register (phase notify): cancelling it then
+	 * would leave the register changed by a cancelled run (branch review R4).
 	 *
 	 * @param int $id Run ID.
 	 * @return bool Whether the run was cancelled.
 	 */
 	public function cancel_run( $id ) {
 		global $wpdb;
-		$changed = $wpdb->query( $wpdb->prepare( "UPDATE {$this->t( 'runs' )} SET state = 'cancelled', phase = 'done', finished_utc = %s WHERE id = %d AND state IN ('queued','running')", self::now(), (int) $id ) );
+		$changed = $wpdb->query( $wpdb->prepare( "UPDATE {$this->t( 'runs' )} SET state = 'cancelled', phase = 'done', finished_utc = %s WHERE id = %d AND state IN ('queued','running') AND phase <> 'notify'", self::now(), (int) $id ) );
 		return false !== $changed && $changed > 0;
+	}
+
+	/**
+	 * Start a transaction (InnoDB on MySQL and MariaDB; SQLite on the
+	 * development site). MyISAM tables ignore it.
+	 */
+	public function begin() {
+		global $wpdb;
+		$wpdb->query( 'START TRANSACTION' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups one step's writes.
+	}
+
+	/**
+	 * Commit the transaction begin() started.
+	 */
+	public function commit() {
+		global $wpdb;
+		$wpdb->query( 'COMMIT' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups one step's writes.
+	}
+
+	/**
+	 * Undo the transaction begin() started.
+	 */
+	public function rollback() {
+		global $wpdb;
+		$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups one step's writes.
 	}
 
 	/**

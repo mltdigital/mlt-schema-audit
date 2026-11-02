@@ -38,7 +38,7 @@ class Admin {
 		'unchanged'       => array( 'info', 'Nothing changed.' ),
 		'invalid'         => array( 'error', 'Not saved. See the messages below.' ),
 		'cancelled'       => array( 'success', 'The audit was cancelled.' ),
-		'not_cancelled'   => array( 'info', 'Nothing was cancelled: no audit was in progress, or it had just finished.' ),
+		'not_cancelled'   => array( 'info', 'Nothing was cancelled: no audit was in progress, or it had already updated the issue register and was finishing.' ),
 	);
 
 	/**
