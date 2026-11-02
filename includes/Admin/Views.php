@@ -444,6 +444,7 @@ class Views {
 		// The export carries the search too, so it holds what the screen shows.
 		$export_filter = array_filter( array_merge( $filter, array( 'search' => $search ) ), 'strlen' );
 
+		echo '<p class="description">' . esc_html( sprintf( 'This lists what audit #%d read. For every issue across all audits, open the ', $run_id ) ) . '<a href="' . esc_url( self::url( 'mltsa-register' ) ) . '">' . esc_html__( 'issue register', 'mlt-schema-audit' ) . '</a>.</p>';
 		echo '<p>' . esc_html( sprintf( '%d findings in audit #%d (%s).', $total, $run_id, Labels::of( Labels::RUN_STATES, $run['state'] ) ) ) . ' ';
 		echo '<a href="' . esc_url( self::export_url( $run_id, 'zip', $export_filter ) ) . '">' . esc_html( empty( $export_filter ) ? 'Download ZIP' : 'Download ZIP of this filtered view' ) . '</a></p>';
 		if ( 'complete' !== $run['state'] ) {
@@ -482,6 +483,97 @@ class Views {
 				)
 			)
 		);
+		self::close();
+	}
+
+	/* -------------------------------------------------------------- Register */
+
+	/**
+	 * The issue register: every issue the audits have recorded, across runs, as it stands now.
+	 *
+	 * The findings screen shows what one audit saw; this one shows current issue state with the
+	 * latest evidence, so an issue is not lost because a later recheck did not cover its page.
+	 */
+	public static function register() {
+		self::require_cap( 'mltsa_audit' );
+		$repo   = new Repository();
+		$filter = array(
+			'work_status'        => self::arg_key( 'work_status' ),
+			'verification_state' => self::arg_key( 'verification_state' ),
+			'owner'              => '',
+		);
+		if ( ! isset( Labels::WORK[ $filter['work_status'] ] ) ) {
+			$filter['work_status'] = '';
+		}
+		if ( ! isset( Labels::VERIFICATION[ $filter['verification_state'] ] ) ) {
+			$filter['verification_state'] = '';
+		}
+		if ( isset( $_GET['owner'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter.
+			$owner = sanitize_text_field( wp_unslash( $_GET['owner'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			if ( 'none' === $owner ) {
+				$filter['owner'] = -1;
+			} elseif ( absint( $owner ) > 0 ) {
+				$filter['owner'] = absint( $owner );
+			}
+		}
+		$search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter.
+
+		self::open( __( 'Issue register', 'mlt-schema-audit' ) );
+		echo '<p>' . esc_html__( 'Every issue the audits have recorded, across all audits, with its current status and the latest evidence. Use Findings to see what one audit read.', 'mlt-schema-audit' ) . '</p>';
+
+		$owner_options = array(
+			''     => 'All',
+			'none' => 'Nobody',
+		);
+		foreach ( $repo->register_owner_ids() as $uid ) {
+			$user                  = get_userdata( $uid );
+			$owner_options[ $uid ] = $user ? $user->display_name : 'User #' . $uid;
+		}
+		echo '<form method="get" class="mltsa-filters"><input type="hidden" name="page" value="mltsa-register">';
+		self::select( 'work_status', 'Status', array_merge( array( '' => 'All' ), Labels::WORK ), $filter['work_status'] );
+		self::select( 'verification_state', 'Verification', array_merge( array( '' => 'All' ), Labels::VERIFICATION ), $filter['verification_state'] );
+		self::select( 'owner', 'Owner', $owner_options, -1 === $filter['owner'] ? 'none' : $filter['owner'] );
+		echo '<label>Search <input type="search" name="s" value="' . esc_attr( $search ) . '"></label> ';
+		echo '<button class="button">' . esc_html__( 'Filter', 'mlt-schema-audit' ) . '</button></form>';
+
+		$query           = $filter;
+		$query['search'] = $search;
+		$paged           = max( 1, self::arg_int( 'paged' ) );
+		$total           = $repo->count_register( $query );
+		$rows            = $repo->register( $query, self::PER_PAGE, ( $paged - 1 ) * self::PER_PAGE );
+		$catalog         = Rules::catalogue();
+
+		echo '<p>' . esc_html( sprintf( '%d issues in the register.', $total ) ) . '</p>';
+		echo '<table class="widefat striped"><thead><tr><th>Issue</th><th>Page</th><th>Severity</th><th>Observed</th><th>Status</th><th>Owner</th><th>Verification</th><th>First observed</th><th>Last observed</th></tr></thead><tbody>';
+		foreach ( $rows as $i ) {
+			$rule  = isset( $catalog[ $i['rule_id'] ] ) ? $catalog[ $i['rule_id'] ] : null;
+			$owner = (int) $i['owner_user_id'] ? get_userdata( (int) $i['owner_user_id'] ) : false;
+			echo '<tr><td><a href="' . esc_url( self::url( 'mltsa-findings', array( 'issue' => (int) $i['id'] ) ) ) . '">' . esc_html( '#' . (int) $i['id'] . ' ' . $i['rule_id'] . ' ' . ( $rule ? $rule['title'] : '' ) ) . '</a></td>';
+			echo '<td>' . esc_html( (int) $i['site_wide'] ? '(site-wide)' : $i['page_url'] ) . '</td>';
+			echo '<td>' . esc_html( Labels::of( Labels::SEVERITIES, $i['severity'] ) ) . '</td>';
+			echo '<td class="mltsa-evidence">' . esc_html( (string) $i['latest_observed'] ) . '</td>';
+			echo '<td>' . esc_html( Labels::of( Labels::WORK, (string) $i['work_status'] ) ) . ( $i['due_date'] ? '<br><span class="description">' . esc_html( 'Due ' . $i['due_date'] ) . '</span>' : '' ) . '</td>';
+			echo '<td>' . esc_html( $owner ? $owner->display_name : ( (int) $i['owner_user_id'] ? 'User #' . (int) $i['owner_user_id'] : 'Nobody' ) ) . '</td>';
+			echo '<td>' . esc_html( Labels::of( Labels::VERIFICATION, (string) $i['verification_state'] ) . ( 'rule_change' === $i['change_reason'] ? ' (rule change)' : '' ) ) . ( (int) $i['verification_run_id'] ? '<br><span class="description">' . esc_html( 'Audit #' . (int) $i['verification_run_id'] ) . '</span>' : '' ) . '</td>';
+			echo '<td>' . esc_html( self::when( $i['first_observed_utc'] ) ) . '</td>';
+			echo '<td>' . esc_html( self::when( $i['last_observed_utc'] ) ) . '</td></tr>';
+		}
+		if ( empty( $rows ) ) {
+			echo '<tr><td colspan="9">' . esc_html__( 'No issues match.', 'mlt-schema-audit' ) . '</td></tr>';
+		}
+		echo '</tbody></table>';
+		self::pager(
+			'mltsa-register',
+			$paged,
+			$total,
+			array(
+				'work_status'        => $filter['work_status'],
+				'verification_state' => $filter['verification_state'],
+				'owner'              => -1 === $filter['owner'] ? 'none' : (string) $filter['owner'],
+				's'                  => $search,
+			)
+		);
+		echo '<p class="description">' . esc_html__( 'Verification shows what the latest audit or recheck that covered the page found. An issue whose page was not read shows Unavailable or keeps its earlier state; it is not cleared.', 'mlt-schema-audit' ) . '</p>';
 		self::close();
 	}
 

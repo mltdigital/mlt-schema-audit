@@ -597,7 +597,7 @@ itest(
 		$settings = get_option( Settings::OPTION );
 		foreach ( $users as $label => $uid ) {
 			list( $cookie, $nonce ) = session_for( $uid );
-			foreach ( array( 'mltsa', 'mltsa-findings', 'mltsa-settings', 'mltsa-health', 'mltsa&run=' . $run_id ) as $screen ) {
+			foreach ( array( 'mltsa', 'mltsa-findings', 'mltsa-register', 'mltsa-settings', 'mltsa-health', 'mltsa&run=' . $run_id ) as $screen ) {
 				$r = http( 'GET', '/wp-admin/admin.php?page=' . $screen, $cookie );
 				icheck( in_array( $r['status'], array( 302, 403 ), true ) && false === strpos( $r['body'], 'mltsa-coverage' ), "{$label} sees {$screen}: {$r['status']}" );
 			}
@@ -870,6 +870,102 @@ itest(
 		icheck( 'second' === $got[ $base + 1 ], 'Chunked read gives the same answer' );
 		icheck( array() === \MLT\SchemaAudit\Issues::latest_notes( array() ), 'Empty list, no result' );
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE object_id BETWEEN %d AND %d AND object_type IN ('issue','run')", $base, $base + 2000 ) );
+	}
+);
+
+itest(
+	'Review finding 9: the issue register lists every issue across runs with owner, status and verification filters, for capability holders only',
+	static function () use ( $admin ) {
+		global $wpdb;
+		$repo   = new Repository();
+		$table  = Installer::table( 'issues' );
+		$prefix = 'mltsa-register-test-';
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE page_url LIKE %s", 'https://register-test.example.invalid/%' ) );
+		$make = static function ( $tag, array $over ) use ( $repo, $prefix ) {
+			return $repo->insert_issue(
+				array_merge(
+					array(
+						'issue_key'          => sha1( $prefix . $tag ),
+						'page_url'           => 'https://register-test.example.invalid/' . $tag . '/',
+						'rule_id'            => 'FACT-006',
+						'severity'           => 'medium',
+						'first_observed_utc' => '2026-09-01 10:00:00',
+						'last_observed_utc'  => '2026-09-01 10:00:00',
+						'verification_state' => 'present',
+						'work_status'        => 'open',
+					),
+					$over
+				)
+			);
+		};
+		$a = $make( 'a', array( 'owner_user_id' => $admin, 'last_observed_utc' => '2026-09-03 10:00:00' ) );
+		$b = $make( 'b', array( 'rule_id' => 'ID-003', 'site_wide' => 1, 'work_status' => 'resolved', 'verification_state' => 'unavailable', 'last_observed_utc' => '2026-09-02 10:00:00' ) );
+		$c = $make( 'c', array( 'rule_id' => 'SYN-001', 'work_status' => 'in_progress', 'verification_state' => 'no_longer_detected', 'owner_user_id' => $admin, 'page_url' => 'https://register-test.example.invalid/c/"><script>alert(9)</script>' ) );
+		list( $cookie ) = session_for( $admin );
+		$get = static function ( $query ) use ( $cookie ) {
+			return http( 'GET', '/wp-admin/admin.php?page=mltsa-register' . $query, $cookie );
+		};
+		$has = static function ( $body, $id ) {
+			return false !== strpos( $body, 'issue=' . $id . '"' ) || false !== strpos( $body, 'issue=' . $id . '&' );
+		};
+
+		// Not tied to one run: these issues have no occurrence in any run, and still list.
+		$r = $get( '&s=register-test.example.invalid' );
+		icheck( 200 === $r['status'], 'Register renders: ' . $r['status'] );
+		icheck( $has( $r['body'], $a ) && $has( $r['body'], $b ) && $has( $r['body'], $c ), 'All three issues listed with no run selected' );
+		icheck( false !== strpos( $r['body'], '3 issues in the register' ), 'Count shown' );
+		icheck( false === strpos( $r['body'], '<script>alert(9)' ) && false !== strpos( $r['body'], '&lt;script&gt;alert(9)' ), 'Page URL escaped' );
+		icheck( false !== strpos( $r['body'], '(site-wide)' ), 'Site-wide issue labelled' );
+		$pos = static function ( $body, $id ) {
+			return strpos( $body, 'issue=' . $id . '"' );
+		};
+		icheck( $pos( $r['body'], $a ) < $pos( $r['body'], $b ) && $pos( $r['body'], $b ) < $pos( $r['body'], $c ), 'Newest last observation first' );
+
+		$only = static function ( $body, array $ids ) use ( $has, $a, $b, $c ) {
+			foreach ( array( $a, $b, $c ) as $id ) {
+				if ( $has( $body, $id ) !== in_array( $id, $ids, true ) ) {
+					return false;
+				}
+			}
+			return true;
+		};
+		$r = $get( '&s=register-test.example.invalid&owner=' . $admin );
+		icheck( $only( $r['body'], array( $a, $c ) ), 'Owner filter' );
+		$r = $get( '&s=register-test.example.invalid&owner=none' );
+		icheck( $only( $r['body'], array( $b ) ), 'Owner filter: nobody' );
+		$r = $get( '&s=register-test.example.invalid&work_status=in_progress' );
+		icheck( $only( $r['body'], array( $c ) ), 'Status filter' );
+		$r = $get( '&s=register-test.example.invalid&verification_state=unavailable' );
+		icheck( $only( $r['body'], array( $b ) ), 'Verification filter' );
+		$r = $get( '&s=register-test.example.invalid&work_status=open&owner=' . $admin . '&verification_state=present' );
+		icheck( $only( $r['body'], array( $a ) ), 'Filters combine' );
+		$r = $get( '&s=register-test.example.invalid&work_status=%27%20OR%201%3D1' );
+		icheck( 200 === $r['status'] && $only( $r['body'], array( $a, $b, $c ) ), 'An unknown status value is ignored, not run as SQL' );
+		$r = $get( '&s=' . rawurlencode( "%' OR 1=1 --" ) );
+		icheck( 200 === $r['status'] && false !== strpos( $r['body'], '0 issues in the register' ), 'SQL metacharacters in search match nothing' );
+
+		// Paging.
+		for ( $n = 0; $n < 52; $n++ ) {
+			$make( 'fill' . $n, array( 'page_url' => 'https://register-test.example.invalid/fill/' . $n ) );
+		}
+		$r1 = $get( '&s=register-test.example.invalid%2Ffill' );
+		$r2 = $get( '&s=register-test.example.invalid%2Ffill&paged=2' );
+		icheck( false !== strpos( $r1['body'], '52 issues in the register' ) && false !== strpos( $r1['body'], 'Page 1 of 2' ), 'First page of two' );
+		icheck( false !== strpos( $r2['body'], 'Page 2 of 2' ) && 2 === substr_count( $r2['body'], 'register-test.example.invalid/fill/' ), 'Second page holds the remaining two' );
+
+		// The findings screen points to it, and the issue link works.
+		$f = http( 'GET', '/wp-admin/admin.php?page=mltsa-findings', $cookie );
+		icheck( false !== strpos( $f['body'], 'page=mltsa-register' ), 'Findings screen links to the register' );
+		$d = http( 'GET', '/wp-admin/admin.php?page=mltsa-findings&issue=' . $a, $cookie );
+		icheck( 200 === $d['status'] && false !== strpos( $d['body'], 'FACT-006' ), 'Issue link opens the issue' );
+
+		// Access control.
+		foreach ( array( 'anonymous' => 0, 'subscriber' => test_user( 'mltsa_test_subscriber', 'subscriber' ), 'editor' => test_user( 'mltsa_test_editor', 'editor' ), 'admin_no_caps' => test_user( 'mltsa_test_admin_nocap', 'administrator', true ) ) as $label => $uid ) {
+			list( $other ) = session_for( $uid );
+			$r             = http( 'GET', '/wp-admin/admin.php?page=mltsa-register', $other );
+			icheck( in_array( $r['status'], array( 302, 403 ), true ) && false === strpos( $r['body'], 'register-test.example.invalid' ) && false === strpos( $r['body'], 'mltsa-coverage' ), "{$label} sees the register: {$r['status']}" );
+		}
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE page_url LIKE %s", 'https://register-test.example.invalid/%' ) );
 	}
 );
 

@@ -62,6 +62,7 @@ class Admin {
 		add_menu_page( 'MLT Schema Audit', 'Schema Audit', 'mltsa_audit', 'mltsa', array( Views::class, 'audits' ), 'dashicons-search', 81 );
 		add_submenu_page( 'mltsa', 'Audits', 'Audits', 'mltsa_audit', 'mltsa', array( Views::class, 'audits' ) );
 		add_submenu_page( 'mltsa', 'Findings', 'Findings', 'mltsa_audit', 'mltsa-findings', array( Views::class, 'findings' ) );
+		add_submenu_page( 'mltsa', 'Issue register', 'Issue register', 'mltsa_audit', 'mltsa-register', array( Views::class, 'register' ) );
 		add_submenu_page( 'mltsa', 'Settings', 'Settings', 'mltsa_manage', 'mltsa-settings', array( Views::class, 'settings' ) );
 		add_submenu_page( 'mltsa', 'Health', 'Health', 'mltsa_audit', 'mltsa-health', array( Views::class, 'health' ) );
 	}

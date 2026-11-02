@@ -41,6 +41,8 @@ Open **Findings** (or **View findings** on an audit). Each finding has:
 
 Open a finding to read what the rule checks, why it matters and what to check next.
 
+**Findings shows one audit; the Issue register shows everything outstanding.** Findings lists what a single audit read, newest by default. After a recheck of one page, issues on other pages are not in that audit, so they are not listed there. Open **Issue register** to see every issue across all audits as it stands now: its status, owner, due date, verification state, first and last observed, and the latest evidence. Filter by status, verification state or owner (including nobody), or search by page, rule or entity. An issue is never cleared because a page was not read: it keeps its earlier state or shows Unavailable.
+
 Common cases from the pilot:
 
 | You see | What it usually means |

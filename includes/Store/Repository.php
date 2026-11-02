@@ -608,6 +608,89 @@ class Repository {
 	}
 
 	/**
+	 * The issue register across runs: current issue state with the latest evidence.
+	 *
+	 * @param array $filter { work_status, verification_state, owner (user ID, or -1 for nobody), search }.
+	 * @param int   $limit  Limit (0 for all).
+	 * @param int   $offset Offset.
+	 * @return array
+	 */
+	public function register( array $filter = array(), $limit = 50, $offset = 0 ) {
+		global $wpdb;
+		list( $where, $args ) = $this->register_where( $filter );
+		$sql                  = "SELECT i.*, o.observed AS latest_observed FROM {$this->t( 'issues' )} i
+			LEFT JOIN {$this->t( 'occurrences' )} o ON o.id = i.latest_occurrence_id
+			WHERE $where ORDER BY i.last_observed_utc DESC, i.id DESC";
+		if ( $limit > 0 ) {
+			$sql   .= ' LIMIT %d OFFSET %d';
+			$args[] = (int) $limit;
+			$args[] = (int) $offset;
+		}
+		return (array) $wpdb->get_results( $wpdb->prepare( $sql, $args ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Built from fixed clauses with placeholders.
+	}
+
+	/**
+	 * Number of issues matching a register filter.
+	 *
+	 * @param array $filter Filter.
+	 * @return int
+	 */
+	public function count_register( array $filter = array() ) {
+		global $wpdb;
+		list( $where, $args ) = $this->register_where( $filter );
+		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$this->t( 'issues' )} i WHERE $where", $args ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- Built from fixed clauses with placeholders.
+	}
+
+	/**
+	 * Owners that hold at least one issue, for the register's owner filter.
+	 *
+	 * @return array User IDs.
+	 */
+	public function register_owner_ids() {
+		global $wpdb;
+		return array_map( 'intval', (array) $wpdb->get_col( "SELECT DISTINCT owner_user_id FROM {$this->t( 'issues' )} WHERE owner_user_id > 0 ORDER BY owner_user_id" ) );
+	}
+
+	/**
+	 * WHERE clause for the register: fixed fragments with placeholders only.
+	 *
+	 * @param array $filter Filter.
+	 * @return array [ sql, args ]
+	 */
+	private function register_where( array $filter ) {
+		global $wpdb;
+		$where = array( 'i.id > %d' ); // Always a placeholder, so prepare() is happy with no filter.
+		$args  = array( 0 );
+		$map   = array(
+			'work_status'        => 'i.work_status = %s',
+			'verification_state' => 'i.verification_state = %s',
+		);
+		foreach ( $map as $key => $clause ) {
+			if ( ! empty( $filter[ $key ] ) ) {
+				$where[] = $clause;
+				$args[]  = (string) $filter[ $key ];
+			}
+		}
+		if ( isset( $filter['owner'] ) && '' !== (string) $filter['owner'] ) {
+			$owner = (int) $filter['owner'];
+			if ( $owner < 0 ) {
+				$where[] = 'i.owner_user_id = 0';
+			} elseif ( $owner > 0 ) {
+				$where[] = 'i.owner_user_id = %d';
+				$args[]  = $owner;
+			}
+		}
+		if ( isset( $filter['search'] ) && '' !== (string) $filter['search'] ) {
+			$where[] = '(i.page_url LIKE %s OR i.rule_id LIKE %s OR i.entity_key LIKE %s)';
+			$like    = '%' . $wpdb->esc_like( (string) $filter['search'] ) . '%';
+			$args[]  = $like;
+			$args[]  = $like;
+			$args[]  = $like;
+		}
+		return array( implode( ' AND ', $where ), $args );
+	}
+
+	/**
 	 * Issue counts by work status and verification state.
 	 *
 	 * @return array { work: status => n, verification: state => n }
