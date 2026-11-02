@@ -1542,7 +1542,7 @@ itest(
 );
 
 itest(
-	'Branch review R2: a site-wide issue resting on an unpublished page is cleared by a full audit; one resting on a page outside the post types is held',
+	'Branch review R2: a site-wide issue resting on an unpublished page is cleared by a full audit; one resting on a page outside the post types, or a sitemap-only URL, is not',
 	static function () use ( $admin ) {
 		global $wpdb;
 		finish_active_runs();
@@ -1557,7 +1557,8 @@ itest(
 		};
 		$refs_dup  = array( $key( $about ), $key( $dup ) );
 		$refs_news = array( $key( $about ), $key( $news ) );
-		wp_update_post( array( 'ID' => $dup, 'post_status' => 'draft' ) );
+		// Listed only by a sitemap in the past; sitemap discovery is now off.
+		$refs_map  = array( $key( $about ), Evaluator::url_key( home_url( '/r2-sitemap-only/' ) ) );
 		$version = Rules::fingerprint()['SITE-001'];
 		$make    = static function ( $tag, array $refs ) use ( $repo, $version ) {
 			return $repo->insert_issue(
@@ -1578,15 +1579,13 @@ itest(
 				)
 			);
 		};
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ) ) );
-		$id_dup  = $make( 'dup', $refs_dup );
-		$id_news = $make( 'news', $refs_news );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ), sha1( 'mltsa-r2-map' ) ) );
 		$client  = new class() implements MLT\SchemaAudit\Engine\HttpClient {
 			public function request( $url, $pinned_ip, array $args ) {
 				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'text/html' ), 'body' => '<html><head><title>x</title></head><body></body></html>', 'truncated' => false, 'pinned' => true );
 			}
 		};
-		try {
+		$audit  = static function () use ( $admin, $client, $repo ) {
 			$run_id = Scheduler::start_manual( $admin );
 			icheck( $run_id > 0, 'Full audit started' );
 			for ( $i = 0; $i < 20; $i++ ) {
@@ -1597,17 +1596,28 @@ itest(
 			}
 			$run = $repo->get_run( $run_id );
 			icheck( 'complete' === $run['state'], 'Audit complete: ' . $run['state'] );
+		};
+		try {
+			// First audit while the duplicate page is published, so the
+			// run history knows it as a post; then it is unpublished.
+			$audit();
+			wp_update_post( array( 'ID' => $dup, 'post_status' => 'draft' ) );
+			$id_dup  = $make( 'dup', $refs_dup );
+			$id_news = $make( 'news', $refs_news );
+			$id_map  = $make( 'map', $refs_map );
+			$audit();
 			$state = static function ( $id ) use ( $wpdb, $table ) {
 				return $wpdb->get_var( $wpdb->prepare( "SELECT verification_state FROM {$table} WHERE id = %d", $id ) );
 			};
 			icheck( 'no_longer_detected' === $state( $id_dup ), 'Evidence page unpublished, the other read: cleared, ' . $state( $id_dup ) );
 			icheck( 'present' === $state( $id_news ), 'Evidence page still published but outside the post types: held, ' . $state( $id_news ) );
+			icheck( 'no_longer_detected' !== $state( $id_map ), 'Sitemap-only evidence URL, sitemap discovery off: not cleared, ' . $state( $id_map ) );
 		} finally {
 			finish_active_runs();
 			wp_delete_post( $about, true );
 			wp_delete_post( $dup, true );
 			wp_delete_post( $news, true );
-			$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ) ) );
+			$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ), sha1( 'mltsa-r2-map' ) ) );
 		}
 	}
 );

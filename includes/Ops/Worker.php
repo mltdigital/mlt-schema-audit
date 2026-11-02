@@ -793,7 +793,7 @@ class Worker {
 			$listed    = $this->repo->url_index( $run_id );
 			$evidence  = SiteRules::evidence( $facts, $listed );
 			$resources = SiteRules::resource_outcomes( $facts, isset( $summary['resource_outcomes'] ) ? (array) $summary['resource_outcomes'] : array() );
-			$gone      = self::gone_pages( $issues, $pages, $listed );
+			$gone      = $this->gone_pages( $issues, $pages, $listed );
 		}
 		$fingerprint = Repository::decode( $run['fingerprint'] );
 		$prior       = $baseline ? Repository::decode( $baseline['fingerprint'] ) : array();
@@ -930,26 +930,27 @@ class Worker {
 
 	/**
 	 * Evidence pages of active site-wide issues that a full-scope run did not
-	 * list and that are no longer a published page (unpublished, trashed,
-	 * deleted, or a URL that is not a post and no longer discovered). Such a
-	 * page has left the site, so it settles its part of the evidence, as a
-	 * page answering 404 does. A page the run excluded (URL cap, policy,
-	 * password), or a published post outside the configured post types, is
-	 * still on the site and keeps the issue held (finding 2; branch review
-	 * R2).
+	 * list and that an earlier run listed as a WordPress post which is no
+	 * longer published (unpublished, trashed or deleted). Such a page has
+	 * left the site, so it settles its part of the evidence, as a page
+	 * answering 404 does. Anything else not listed is held: a page the run
+	 * excluded (URL cap, policy, password), a published post outside the
+	 * configured post types, and a URL that was never known as a post (a
+	 * sitemap-only URL may only be missing because sitemap discovery was
+	 * switched off). Narrowed coverage never clears an issue (finding 2;
+	 * branch review R2).
 	 *
 	 * @param array $issues issue_key => issue row.
 	 * @param array $pages  url_key => coverage for this run (excluded rows left out).
 	 * @param array $listed Run URL id => URL, every URL this run listed (excluded rows too).
 	 * @return array url_key => true
 	 */
-	private static function gone_pages( array $issues, array $pages, array $listed ) {
+	private function gone_pages( array $issues, array $pages, array $listed ) {
 		$known = array();
 		foreach ( $listed as $url ) {
 			$known[ Evaluator::url_key( $url ) ] = true;
 		}
-		$scheme = (string) wp_parse_url( home_url( '/' ), PHP_URL_SCHEME );
-		$gone   = array();
+		$gone = array();
 		foreach ( $issues as $issue ) {
 			if ( empty( $issue['site_wide'] ) || ! in_array( $issue['verification_state'], Comparator::ACTIVE_STATES, true ) ) {
 				continue;
@@ -958,8 +959,8 @@ class Worker {
 				if ( 0 === strpos( $ref, 'resource:' ) || isset( $pages[ $ref ] ) || isset( $known[ $ref ] ) || isset( $gone[ $ref ] ) ) {
 					continue;
 				}
-				$post_id = url_to_postid( ( '' === $scheme ? 'https' : $scheme ) . '://' . $ref );
-				if ( ! $post_id || 'publish' !== get_post_status( $post_id ) ) {
+				$post_id = $this->repo->last_post_id_for( $ref );
+				if ( $post_id && 'publish' !== get_post_status( $post_id ) ) {
 					$gone[ $ref ] = true;
 				}
 			}

@@ -339,6 +339,18 @@ class Repository {
 	}
 
 	/**
+	 * The WordPress post an earlier run listed at this address, or 0 when no
+	 * run listed it as a post (a sitemap-only URL, or history pruned).
+	 *
+	 * @param string $key URL key (Evaluator::url_key()).
+	 * @return int Post ID.
+	 */
+	public function last_post_id_for( $key ) {
+		global $wpdb;
+		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM {$this->t( 'run_urls' )} WHERE url_key = %s AND post_id > 0 ORDER BY id DESC LIMIT 1", sha1( (string) $key ) ) );
+	}
+
+	/**
 	 * Update a run URL.
 	 *
 	 * @param int   $id     ID.
