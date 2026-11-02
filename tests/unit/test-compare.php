@@ -307,3 +307,35 @@ mltsa_test(
 		check_same( array( '0141', '0161' ), array_keys( SiteRules::by_count_desc( array( '0141' => array( 'a' ), '0161' => array( 'b' ) ) ) ), 'Numeric-looking keys keep their order on a tie' );
 	}
 );
+
+mltsa_test(
+	'Branch review R2: a site-wide issue whose evidence page left the site, or is not HTML, is no longer held for ever',
+	static function () {
+		$issue = site_issue( array( 'firm.example/about', 'firm.example/old-duplicate' ) );
+		$pages = array( 'firm.example' => 'ok', 'firm.example/about' => 'ok' );
+		check_same( null, reconcile_one( $issue, $pages ), 'Not listed and not known to be gone: held, as finding 2 requires' );
+		$fp  = array( 'SITE-001' => 1 );
+		$out = Comparator::reconcile( array( 'k' => $issue ), array(), $pages, $fp, $fp, true, array(), array( 'firm.example/old-duplicate' => true ) );
+		check_same( 'no_longer_detected', $out['update']['k']['verification_state'], 'Unpublished or deleted page settles its part' );
+		$out = Comparator::reconcile( array( 'k' => $issue ), array(), array( 'firm.example/about' => 'timeout' ), $fp, $fp, true, array(), array( 'firm.example/old-duplicate' => true ) );
+		check_same( 'unavailable', $out['update']['k']['verification_state'], 'The other page unread still holds it as unavailable' );
+		$pages['firm.example/old-duplicate'] = 'not_html';
+		check_same( 'no_longer_detected', reconcile_one( $issue, $pages ), 'A page read as not HTML carries no JSON-LD: settled' );
+		check_same( 'read', Comparator::evidence_state( array( 'firm.example/gone' ), array(), array(), array( 'firm.example/gone' => true ) ), 'Only gone pages: read' );
+		check_same( 'missing', Comparator::evidence_state( array( 'firm.example/gone' ), array(), array(), array( 'firm.example/other' => true ) ), 'Gone list is per page' );
+
+		$base = array(
+			'findings'    => array( 'k' => array( 'hash' => 'h', 'rule_id' => 'SITE-001', 'page' => '', 'refs' => array( 'firm.example/about', 'firm.example/old-duplicate' ) ) ),
+			'pages'       => array(),
+			'fingerprint' => $fp,
+		);
+		$now  = array(
+			'findings'    => array(),
+			'pages'       => array( 'firm.example/about' => array( 'coverage' => 'ok', 'markup' => 'a' ) ),
+			'fingerprint' => $fp,
+		);
+		check_same( array(), Comparator::compare( $base, $now )['resolved'], 'Digest: held while the page may still exist' );
+		$now['gone'] = array( 'firm.example/old-duplicate' => true );
+		check_same( array( 'k' ), Comparator::compare( $base, $now )['resolved'], 'Digest: resolved once the page has left the site' );
+	}
+);

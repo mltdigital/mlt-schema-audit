@@ -16,6 +16,8 @@
 
 // phpcs:disable
 
+use MLT\SchemaAudit\Engine\Evaluator;
+use MLT\SchemaAudit\Engine\Rules;
 use MLT\SchemaAudit\Installer;
 use MLT\SchemaAudit\Ops\Calendar;
 use MLT\SchemaAudit\Ops\Outbox;
@@ -1533,6 +1535,77 @@ itest(
 		} finally {
 			$wp_rewrite->set_permalink_structure( $permalink );
 			finish_active_runs();
+		}
+	}
+);
+
+itest(
+	'Branch review R2: a site-wide issue resting on an unpublished page is cleared by a full audit; one resting on a page outside the post types is held',
+	static function () use ( $admin ) {
+		global $wpdb;
+		finish_active_runs();
+		reset_settings( array( 'post_types' => array( 'page' ), 'sitemap_discovery' => false, 'timeout' => 15 ) );
+		$repo  = new Repository();
+		$table = Installer::table( 'issues' );
+		$about = wp_insert_post( array( 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'R2 about', 'post_name' => 'r2-about', 'post_content' => 'x' ) );
+		$dup   = wp_insert_post( array( 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'R2 duplicate', 'post_name' => 'r2-old-duplicate', 'post_content' => 'x' ) );
+		$news  = wp_insert_post( array( 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'R2 news', 'post_name' => 'r2-news', 'post_content' => 'x' ) );
+		$key   = static function ( $id ) {
+			return Evaluator::url_key( get_permalink( $id ) );
+		};
+		$refs_dup  = array( $key( $about ), $key( $dup ) );
+		$refs_news = array( $key( $about ), $key( $news ) );
+		wp_update_post( array( 'ID' => $dup, 'post_status' => 'draft' ) );
+		$version = Rules::fingerprint()['SITE-001'];
+		$make    = static function ( $tag, array $refs ) use ( $repo, $version ) {
+			return $repo->insert_issue(
+				array(
+					'issue_key'          => sha1( 'mltsa-r2-' . $tag ),
+					'page_url'           => '',
+					'site_wide'          => 1,
+					'rule_id'            => 'SITE-001',
+					'rule_version'       => $version,
+					'severity'           => 'high',
+					'entity_key'         => 'org',
+					'first_observed_utc' => '2026-10-01 10:00:00',
+					'last_observed_utc'  => '2026-10-01 10:00:00',
+					'verification_state' => 'present',
+					'work_status'        => 'open',
+					'observed_hash'      => 'r2',
+					'evidence'           => (string) wp_json_encode( $refs ),
+				)
+			);
+		};
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ) ) );
+		$id_dup  = $make( 'dup', $refs_dup );
+		$id_news = $make( 'news', $refs_news );
+		$client  = new class() implements MLT\SchemaAudit\Engine\HttpClient {
+			public function request( $url, $pinned_ip, array $args ) {
+				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'text/html' ), 'body' => '<html><head><title>x</title></head><body></body></html>', 'truncated' => false, 'pinned' => true );
+			}
+		};
+		try {
+			$run_id = Scheduler::start_manual( $admin );
+			icheck( $run_id > 0, 'Full audit started' );
+			for ( $i = 0; $i < 20; $i++ ) {
+				$status = ( new Worker( $client, static function () {} ) )->process( $run_id, 60 );
+				if ( ! in_array( $status['state'], array( 'queued', 'running' ), true ) ) {
+					break;
+				}
+			}
+			$run = $repo->get_run( $run_id );
+			icheck( 'complete' === $run['state'], 'Audit complete: ' . $run['state'] );
+			$state = static function ( $id ) use ( $wpdb, $table ) {
+				return $wpdb->get_var( $wpdb->prepare( "SELECT verification_state FROM {$table} WHERE id = %d", $id ) );
+			};
+			icheck( 'no_longer_detected' === $state( $id_dup ), 'Evidence page unpublished, the other read: cleared, ' . $state( $id_dup ) );
+			icheck( 'present' === $state( $id_news ), 'Evidence page still published but outside the post types: held, ' . $state( $id_news ) );
+		} finally {
+			finish_active_runs();
+			wp_delete_post( $about, true );
+			wp_delete_post( $dup, true );
+			wp_delete_post( $news, true );
+			$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ) ) );
 		}
 	}
 );

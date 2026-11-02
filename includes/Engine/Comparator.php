@@ -43,6 +43,13 @@ class Comparator {
 	const UNKNOWN = array( 'timeout', 'error', 'unavailable', 'blocked', 'too_large', 'http_error', 'redirect_limit', 'pending' );
 
 	/**
+	 * Page outcomes that settle a site-wide issue's evidence on that page:
+	 * read, conclusively gone, or read and not HTML (so it carries no
+	 * JSON-LD), as for a page that has left the site (branch review R2).
+	 */
+	const SETTLED = array( 'ok', 'not_found', 'gone', 'redirected', 'not_html' );
+
+	/**
 	 * Audits in a row an issue must be held as unavailable before the
 	 * coverage figure counts it as repeatedly unchecked.
 	 */
@@ -88,10 +95,12 @@ class Comparator {
 	 * @param array  $prior_fingerprint rule_id => version of the previous comparable run, or empty.
 	 * @param bool   $full_scope   Whether this run covered the full scope (site-wide rules ran).
 	 * @param array  $resources    Resource URL => check outcome, for every resource a page read in this run references.
+	 * @param array  $gone         url_key => true for evidence pages that have left the site (no longer
+	 *                             a published page), so are settled although this run did not list them.
 	 * @return array { insert: issue_key => fields, update: issue_key => fields, events: list,
 	 *                 unavailable: issue keys held as unavailable in this run, summary }
 	 */
-	public static function reconcile( array $issues, array $findings, array $pages, array $fingerprint, array $prior_fingerprint, $full_scope, array $resources = array() ) {
+	public static function reconcile( array $issues, array $findings, array $pages, array $fingerprint, array $prior_fingerprint, $full_scope, array $resources = array(), array $gone = array() ) {
 		$out = array(
 			'insert'      => array(),
 			'update'      => array(),
@@ -168,7 +177,7 @@ class Comparator {
 				if ( ! $full_scope ) {
 					continue;
 				}
-				$evidence = self::evidence_state( self::refs( $issue, $pages ), $pages, $resources );
+				$evidence = self::evidence_state( self::refs( $issue, $pages ), $pages, $resources, $gone );
 				if ( 'unknown' === $evidence ) {
 					if ( 'unavailable' !== $issue['verification_state'] ) {
 						$out['update'][ $key ] = array( 'verification_state' => 'unavailable' );
@@ -178,7 +187,7 @@ class Comparator {
 					continue;
 				}
 				if ( 'missing' === $evidence ) {
-					continue; // Evidence outside this run's scope: untouched.
+					continue; // Evidence excluded or left out of this run, but still on the site: untouched.
 				}
 				if ( ! $rule_same ) {
 					++$out['summary']['rule_change_held'];
@@ -296,18 +305,21 @@ class Comparator {
 	/**
 	 * Whether the evidence behind a site-wide issue was read in this run.
 	 *
-	 * "read": every page was read or has conclusively gone, and every
+	 * "read": every page was read (HTML or not) or has conclusively gone,
+	 * including a page no longer published at all ($gone), and every
 	 * resource was checked or is no longer referenced by any page read.
 	 * "unknown": a page or resource could not be read (timeout, error,
-	 * pending, over the resource cap). "missing": a page is outside this
-	 * run (excluded, or dropped from the scope), or there is no evidence.
+	 * pending, over the resource cap). "missing": a page still on the site
+	 * is outside this run (excluded, over the URL cap, or its post type out
+	 * of scope), or there is no evidence.
 	 *
 	 * @param array $refs      Page url_keys and resource:<url> refs.
 	 * @param array $pages     url_key => coverage for this run.
 	 * @param array $resources Resource URL => check outcome, for every resource a page read in this run references.
+	 * @param array $gone      url_key => true for pages that have left the site.
 	 * @return string read|unknown|missing
 	 */
-	public static function evidence_state( array $refs, array $pages, array $resources ) {
+	public static function evidence_state( array $refs, array $pages, array $resources, array $gone = array() ) {
 		$settled = array_merge( self::EVALUATED, self::REMOVED );
 		$read    = 0;
 		$held    = 0;
@@ -324,7 +336,7 @@ class Comparator {
 			if ( in_array( $coverage, self::UNKNOWN, true ) ) {
 				return 'unknown';
 			}
-			if ( in_array( $coverage, $settled, true ) ) {
+			if ( in_array( $coverage, self::SETTLED, true ) || ( '' === $coverage && isset( $gone[ $ref ] ) ) ) {
 				++$read;
 			} else {
 				++$held;
@@ -402,7 +414,7 @@ class Comparator {
 			// show an issue as resolved; a site-wide issue needs all of its
 			// evidence read.
 			if ( '' === $page ) {
-				$read = 'read' === self::evidence_state( isset( $item['refs'] ) ? (array) $item['refs'] : array(), $coverage, $resources );
+				$read = 'read' === self::evidence_state( isset( $item['refs'] ) ? (array) $item['refs'] : array(), $coverage, $resources, isset( $current['gone'] ) ? (array) $current['gone'] : array() );
 			} else {
 				$read = isset( $current['pages'][ $page ] ) && 'ok' === $current['pages'][ $page ]['coverage'];
 			}

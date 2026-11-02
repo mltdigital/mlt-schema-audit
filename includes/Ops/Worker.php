@@ -772,15 +772,18 @@ class Worker {
 		$summary   = Repository::decode( $run['summary'] );
 		$evidence  = array();
 		$resources = array();
+		$gone      = array();
+		$issues    = $this->repo->issues_by_key();
 		if ( self::full_scope( $run ) ) {
 			$facts     = $this->repo->page_facts( $run_id );
-			$evidence  = SiteRules::evidence( $facts, $this->repo->url_index( $run_id ) );
+			$listed    = $this->repo->url_index( $run_id );
+			$evidence  = SiteRules::evidence( $facts, $listed );
 			$resources = SiteRules::resource_outcomes( $facts, isset( $summary['resource_outcomes'] ) ? (array) $summary['resource_outcomes'] : array() );
+			$gone      = self::gone_pages( $issues, $pages, $listed );
 		}
 		$fingerprint = Repository::decode( $run['fingerprint'] );
 		$prior       = $baseline ? Repository::decode( $baseline['fingerprint'] ) : array();
-		$issues      = $this->repo->issues_by_key();
-		$result      = Comparator::reconcile( $issues, $findings, $pages, $fingerprint, $prior, self::full_scope( $run ), $resources );
+		$result      = Comparator::reconcile( $issues, $findings, $pages, $fingerprint, $prior, self::full_scope( $run ), $resources, $gone );
 		$now         = Repository::now();
 		$is_baseline = empty( $prior );
 
@@ -882,7 +885,7 @@ class Worker {
 			$summary['resource_checks'] = SiteRules::resource_counts( $resources );
 		}
 		if ( $baseline && self::full_scope( $run ) ) {
-			$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage, $resources );
+			$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage, $resources, $gone );
 		}
 		$this->save_run(
 			$run_id,
@@ -895,6 +898,45 @@ class Worker {
 	}
 
 	/**
+	 * Evidence pages of active site-wide issues that a full-scope run did not
+	 * list and that are no longer a published page (unpublished, trashed,
+	 * deleted, or a URL that is not a post and no longer discovered). Such a
+	 * page has left the site, so it settles its part of the evidence, as a
+	 * page answering 404 does. A page the run excluded (URL cap, policy,
+	 * password), or a published post outside the configured post types, is
+	 * still on the site and keeps the issue held (finding 2; branch review
+	 * R2).
+	 *
+	 * @param array $issues issue_key => issue row.
+	 * @param array $pages  url_key => coverage for this run (excluded rows left out).
+	 * @param array $listed Run URL id => URL, every URL this run listed (excluded rows too).
+	 * @return array url_key => true
+	 */
+	private static function gone_pages( array $issues, array $pages, array $listed ) {
+		$known = array();
+		foreach ( $listed as $url ) {
+			$known[ Evaluator::url_key( $url ) ] = true;
+		}
+		$scheme = (string) wp_parse_url( home_url( '/' ), PHP_URL_SCHEME );
+		$gone   = array();
+		foreach ( $issues as $issue ) {
+			if ( empty( $issue['site_wide'] ) || ! in_array( $issue['verification_state'], Comparator::ACTIVE_STATES, true ) ) {
+				continue;
+			}
+			foreach ( Comparator::refs( $issue, $pages ) as $ref ) {
+				if ( 0 === strpos( $ref, 'resource:' ) || isset( $pages[ $ref ] ) || isset( $known[ $ref ] ) || isset( $gone[ $ref ] ) ) {
+					continue;
+				}
+				$post_id = url_to_postid( ( '' === $scheme ? 'https' : $scheme ) . '://' . $ref );
+				if ( ! $post_id || 'publish' !== get_post_status( $post_id ) ) {
+					$gone[ $ref ] = true;
+				}
+			}
+		}
+		return $gone;
+	}
+
+	/**
 	 * Comparison with the baseline, as counts (the digest carries counts only).
 	 *
 	 * @param array $baseline Baseline run.
@@ -902,9 +944,10 @@ class Worker {
 	 * @param array $current  Current occurrences by key.
 	 * @param array $coverage  Current coverage map.
 	 * @param array $resources Resource URL => check outcome for this run.
+	 * @param array $gone      Evidence pages that have left the site (gone_pages()).
 	 * @return array
 	 */
-	private function comparison_counts( array $baseline, $run_id, array $current, array $coverage, array $resources ) {
+	private function comparison_counts( array $baseline, $run_id, array $current, array $coverage, array $resources, array $gone ) {
 		$issues = $this->repo->issues_by_key();
 		$pages  = array();
 		foreach ( $coverage as $key => $info ) {
@@ -935,6 +978,7 @@ class Worker {
 		$ever   = array();
 
 		$after['resources'] = $resources;
+		$after['gone']      = $gone;
 		foreach ( $issues as $key => $issue ) {
 			if ( (int) $issue['first_run_id'] < (int) $baseline['id'] ) {
 				$ever[ $key ] = true;
