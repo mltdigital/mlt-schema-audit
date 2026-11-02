@@ -108,12 +108,7 @@ class SiteRules {
 			if ( count( $ids ) < 2 ) {
 				continue;
 			}
-			uasort(
-				$ids,
-				static function ( $a, $b ) {
-					return count( $b ) - count( $a );
-				}
-			);
+			$ids = self::by_count_desc( $ids );
 			$names = array_keys( $ids );
 			$main  = (string) $names[0];
 			foreach ( array_slice( $names, 1 ) as $other ) {
@@ -168,12 +163,7 @@ class SiteRules {
 				if ( count( $values ) < 2 ) {
 					continue;
 				}
-				uasort(
-					$values,
-					static function ( $a, $b ) {
-						return count( $b ) - count( $a );
-					}
-				);
+				$values = self::by_count_desc( $values );
 				$keys    = array_keys( $values );
 				$common  = (string) $keys[0];
 				$support = array();
@@ -285,12 +275,7 @@ class SiteRules {
 				}
 				// Most common value is the comparison; every page with a
 				// different value gets an occurrence of one site-wide issue.
-				uasort(
-					$values,
-					static function ( $a, $b ) {
-						return count( $b ) - count( $a );
-					}
-				);
+				$values = self::by_count_desc( $values );
 				$keys    = array_keys( $values );
 				$common  = (string) $keys[0];
 				$display = array(
@@ -326,6 +311,27 @@ class SiteRules {
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * A map of lists ordered by list size, largest first; ties keep their
+	 * original order. PHP 8 sorts are stable, PHP 7.4 sorts are not, so the
+	 * tie is broken explicitly and the most common value (and the issue it
+	 * names) is the same on both.
+	 *
+	 * @param array $map Key => list.
+	 * @return array
+	 */
+	public static function by_count_desc( array $map ) {
+		$order = array_flip( array_keys( $map ) );
+		uksort(
+			$map,
+			static function ( $a, $b ) use ( $map, $order ) {
+				$diff = count( $map[ $b ] ) - count( $map[ $a ] );
+				return 0 !== $diff ? $diff : $order[ $a ] - $order[ $b ];
+			}
+		);
+		return $map;
 	}
 
 	/**

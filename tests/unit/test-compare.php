@@ -284,3 +284,26 @@ mltsa_test(
 		check_same( 6, $many[ $big['ids'][0] ], 'Longest first' );
 	}
 );
+
+mltsa_test(
+	'PHP 7.4: the most common site-wide value is chosen the same way on PHP 7.4 (unstable sort) as on PHP 8; ties keep first-seen order',
+	static function () {
+		$map      = array();
+		$expected = array();
+		for ( $i = 0; $i < 40; $i++ ) {
+			$map[ 'v' . $i ] = 0 === $i % 7 ? array( 1, 2 ) : array( 1 );
+		}
+		foreach ( $map as $key => $list ) {
+			if ( 2 === count( $list ) ) {
+				$expected[] = $key;
+			}
+		}
+		foreach ( $map as $key => $list ) {
+			if ( 1 === count( $list ) ) {
+				$expected[] = $key;
+			}
+		}
+		check_same( $expected, array_keys( SiteRules::by_count_desc( $map ) ), 'Largest first, ties in original order' );
+		check_same( array( '0141', '0161' ), array_keys( SiteRules::by_count_desc( array( '0141' => array( 'a' ), '0161' => array( 'b' ) ) ) ), 'Numeric-looking keys keep their order on a tie' );
+	}
+);
