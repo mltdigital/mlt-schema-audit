@@ -69,8 +69,8 @@ class PageFacts {
 	}
 
 	/**
-	 * National significant number of a UK-style phone value: 01294 464341,
-	 * +44 (0)1294 464341 and tel:+441294464341 all give 1294464341.
+	 * National significant number of a UK-style phone value: 01632 960123,
+	 * +44 (0)1632 960123 and tel:+441632960123 all give 1632960123.
 	 *
 	 * @param string $value Phone.
 	 * @return string '' when the value is not a plausible phone number.
@@ -115,7 +115,7 @@ class PageFacts {
 		}
 		if ( preg_match_all( '/\+?\(?\d[\d\s().\-\/]{7,}\d/', (string) $text, $m ) ) {
 			foreach ( $m[0] as $raw ) {
-				// A digit run can swallow the number after it ("01294 464341 51
+				// A digit run can swallow the number after it ("01632 960123 51
 				// High Street"), so try the run and its phone-length prefixes.
 				$digits     = (string) preg_replace( '/\D+/', '', (string) preg_replace( '/\(0\)/', '', $raw ) );
 				$candidates = array( $digits );

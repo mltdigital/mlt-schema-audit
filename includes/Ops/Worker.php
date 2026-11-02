@@ -44,6 +44,23 @@ class Worker {
 	const SLOW_MS = 3000;
 
 	/**
+	 * Option holding stepped sitemap discovery for the active run.
+	 */
+	const DISCOVERY_OPTION = 'mltsa_discovery_state';
+
+	/**
+	 * Option holding the resume state of the page fetch a slice deferred.
+	 */
+	const PAGE_RESUME_OPTION = 'mltsa_page_resume';
+
+	/**
+	 * Seconds after a tick's budget before its pre-scheduled continuation
+	 * fires: longer than the run lock's grace, so a killed worker's lock has
+	 * expired by then.
+	 */
+	const CONTINUATION_GRACE = 150;
+
+	/**
 	 * Repository.
 	 *
 	 * @var Repository
@@ -79,6 +96,29 @@ class Worker {
 	public $requests = 0;
 
 	/**
+	 * Request timeout in use for this worker (seconds).
+	 *
+	 * @var int
+	 */
+	private $timeout;
+
+	/**
+	 * Whether no URL has been requested yet in this slice, so the next one
+	 * has the whole slice to itself.
+	 *
+	 * @var bool
+	 */
+	private $fresh = false;
+
+	/**
+	 * Whether the slice ended because the next request would not fit in
+	 * the time left, so the next slice can start at once (branch review S5).
+	 *
+	 * @var bool
+	 */
+	private $cut_short = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param HttpClient|null $client Transport.
@@ -89,52 +129,114 @@ class Worker {
 		$this->settings = Settings::all();
 		$this->client   = $client instanceof HttpClient ? $client : new WpHttpClient();
 		$this->sleep    = is_callable( $sleep ) ? $sleep : 'sleep';
+		$this->timeout  = self::request_timeout( $this->settings['timeout'] );
+	}
+
+	/**
+	 * Seconds the PHP time limit of this process leaves for a slice, keeping
+	 * 10 in hand; 0 when there is no limit (WP-CLI).
+	 *
+	 * @return int
+	 */
+	public static function time_ceiling() {
+		$limit = (int) ini_get( 'max_execution_time' );
+		return $limit > 0 ? max( 5, $limit - 10 ) : 0;
+	}
+
+	/**
+	 * The request timeout the worker uses: the setting, lowered only where
+	 * the PHP time limit cannot fit one full request in a slice. The settings
+	 * screen says when that happens (branch review R1).
+	 *
+	 * @param int $setting Timeout setting (seconds).
+	 * @return int
+	 */
+	public static function request_timeout( $setting ) {
+		$ceiling = self::time_ceiling();
+		if ( $ceiling > 0 ) {
+			return max( 1, min( (int) $setting, $ceiling - Fetcher::MIN_REQUEST_SECONDS ) );
+		}
+		return max( 1, (int) $setting );
+	}
+
+	/**
+	 * A slice budget long enough for one request with the full timeout, so
+	 * a page or sitemap that answers within the timeout is always read.
+	 *
+	 * @param int $budget  Budget the caller asked for (seconds).
+	 * @param int $timeout Request timeout in use (seconds).
+	 * @return int
+	 */
+	public static function slice_budget( $budget, $timeout ) {
+		return max( 1, (int) $budget, (int) $timeout + Fetcher::MIN_REQUEST_SECONDS );
 	}
 
 	/**
 	 * One scheduler tick: catch-up check, the active run, then the outbox.
 	 *
-	 * @param int $budget Seconds.
+	 * @param int       $budget Seconds.
+	 * @param self|null $worker Worker, injectable for tests.
 	 * @return array Status.
 	 */
-	public static function tick( $budget ) {
+	public static function tick( $budget, $worker = null ) {
 		update_option( 'mltsa_last_tick', time(), false );
 		if ( Settings::constant_disabled() ) {
 			return array( 'state' => 'disabled' );
 		}
+		Scheduler::ensure_watchdog();
 		Scheduler::catch_up();
 		$status = array( 'state' => 'idle' );
 		$repo   = new Repository();
 		$run    = $repo->active_run();
 		if ( $run ) {
-			$worker = new self();
+			// Queue the next tick before working, so a process killed part way
+			// through (PHP time limit, host kill) still has a continuation
+			// (finding 4). A normal finish below brings it forward.
+			$worker = $worker instanceof self ? $worker : new self();
+			Scheduler::continue_worker( self::slice_budget( $budget, $worker->timeout ) + self::CONTINUATION_GRACE );
 			$status = $worker->process( (int) $run['id'], $budget );
 		}
 		Outbox::process();
 		if ( $repo->active_run() ) {
-			Scheduler::kick_worker( 30 );
+			// A slice cut short by a request that would not fit has more work
+			// ready now: queue the next event after the usual gap between
+			// pages, not 30 seconds, so plain WordPress cron reads at least as
+			// many pages as before branch review R1 (S5).
+			Scheduler::continue_worker( $run && $worker->cut_short ? (int) ceil( (float) $worker->settings['gap_seconds'] ) : 30 );
+		} elseif ( $run ) {
+			Scheduler::clear_worker();
 		}
 		return $status;
 	}
 
 	/**
-	 * Work on a run for up to $budget seconds.
+	 * Work on a run for up to $budget seconds, raised where needed to fit one
+	 * request with the full timeout (slice_budget()).
 	 *
 	 * @param int $run_id Run ID.
 	 * @param int $budget Seconds.
 	 * @return array { state, phase, done, total, run_id }
 	 */
 	public function process( $run_id, $budget ) {
-		$deadline = microtime( true ) + max( 1, (int) $budget );
-		$token    = wp_generate_password( 20, false );
+		if ( \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			// The tables are older than this code: do no work until the
+			// upgrade completes (branch review R5).
+			return $this->status( $run_id, 'schema_outdated' );
+		}
+		$budget          = self::slice_budget( $budget, $this->timeout );
+		$deadline        = microtime( true ) + $budget;
+		$token           = wp_generate_password( 20, false );
+		$this->fresh     = true;
+		$this->cut_short = false;
 		if ( ! $this->repo->claim_run( $run_id, $token, (int) $budget + 120 ) ) {
 			return $this->status( $run_id, 'locked' );
 		}
 		try {
 			$run = $this->repo->get_run( $run_id );
 			if ( $run && 'queued' === $run['state'] ) {
-				$this->repo->update_run(
+				$this->repo->update_run_in_state(
 					$run_id,
+					'queued',
 					array(
 						'state'       => 'running',
 						'started_utc' => Repository::now(),
@@ -143,7 +245,10 @@ class Worker {
 				$run = $this->repo->get_run( $run_id );
 			}
 			while ( $run && 'running' === $run['state'] && microtime( true ) < $deadline ) {
-				if ( $this->should_stop( $run ) ) {
+				// A run that has written the register (phase notify) finishes,
+				// as for a cancel from the screen; the outbox still holds its
+				// mail while the switch is on (branch review R4).
+				if ( 'notify' !== $run['phase'] && $this->should_stop( $run ) ) {
 					$this->finish( $run, 'cancelled', array( 'cancelled_reason' => 'kill_switch' ) );
 					break;
 				}
@@ -185,8 +290,7 @@ class Worker {
 	private function step( array $run, $deadline ) {
 		switch ( $run['phase'] ) {
 			case 'discover':
-				$this->discover( $run );
-				return true;
+				return $this->discover( $run, $deadline );
 			case 'fetch':
 				return $this->fetch_batch( $run, $deadline );
 			case 'site':
@@ -215,7 +319,7 @@ class Worker {
 			$policy,
 			$this->client,
 			array(
-				'timeout'    => (int) $this->settings['timeout'],
+				'timeout'    => $this->timeout,
 				'max_bytes'  => (int) $this->settings['max_bytes'],
 				'user_agent' => self::user_agent(),
 			),
@@ -234,11 +338,14 @@ class Worker {
 	}
 
 	/**
-	 * Discover: freeze the URL list.
+	 * Discover: freeze the URL list. Sitemaps are read one per call, with
+	 * progress in an option, so no slice waits on more than one sitemap.
 	 *
-	 * @param array $run Run.
+	 * @param array $run      Run.
+	 * @param float $deadline Deadline.
+	 * @return bool Whether to keep going in this tick.
 	 */
-	private function discover( array $run ) {
+	private function discover( array $run, $deadline ) {
 		list( $policy, $fetcher ) = $this->engine();
 		$scope                    = Repository::decode( $run['scope'] );
 		if ( ! empty( $scope['urls'] ) ) {
@@ -252,33 +359,52 @@ class Worker {
 				);
 			}
 		} else {
-			$candidates = Discovery::from_wordpress( $this->settings );
+			$sitemap = array();
 			if ( ! empty( $this->settings['sitemap_discovery'] ) ) {
-				$candidates      = array_merge( $candidates, Discovery::from_sitemaps( $fetcher, $policy ) );
-				$this->requests += 1;
+				$state = get_option( self::DISCOVERY_OPTION );
+				if ( ! is_array( $state ) || ! isset( $state['run_id'] ) || (int) $state['run_id'] !== (int) $run['id'] ) {
+					$state = array_merge( Discovery::sitemap_state( $policy ), array( 'run_id' => (int) $run['id'] ) );
+				}
+				if ( ! $state['done'] ) {
+					$before          = (int) $state['fetched'];
+					$state           = Discovery::sitemap_step( $fetcher, $policy, $state, $deadline, $this->fresh );
+					$this->fresh     = false;
+					$this->requests += (int) $state['fetched'] - $before;
+					update_option( self::DISCOVERY_OPTION, $state, false );
+					if ( $state['deferred'] ) {
+						$this->cut_short = true;
+					}
+					$this->save_run( (int) $run['id'], array( 'progress_utc' => Repository::now() ) );
+					return ! $state['deferred'];
+				}
+				$sitemap = $state['out'];
+				if ( ! empty( $state['not_read'] ) ) {
+					$scope['sitemaps_not_read'] = (int) $state['not_read'];
+				}
 			}
+			$candidates = array_merge( Discovery::from_wordpress( $this->settings ), $sitemap );
 		}
 		$frozen = Discovery::freeze( $candidates, $policy, (int) $this->settings['max_urls'] );
 		$seq    = 0;
+		$rows   = array();
 		foreach ( $frozen['urls'] as $item ) {
-			$this->repo->insert_run_url(
-				array(
-					'run_id'           => (int) $run['id'],
-					'seq'              => ++$seq,
-					'url'              => $item['url'],
-					'url_key'          => $item['url_key'],
-					'discovery_source' => substr( $item['source'], 0, 20 ),
-					'post_id'          => $item['post_id'],
-					'coverage'         => $item['coverage'],
-					'coverage_reason'  => $item['reason'],
-				)
+			$rows[] = array(
+				'seq'              => ++$seq,
+				'url'              => $item['url'],
+				'url_key'          => $item['url_key'],
+				'discovery_source' => substr( $item['source'], 0, 20 ),
+				'post_id'          => $item['post_id'],
+				'coverage'         => $item['coverage'],
+				'coverage_reason'  => $item['reason'],
 			);
 		}
+		// Replaces rows a killed earlier attempt left, so no URL is listed twice.
+		$this->repo->replace_run_urls( (int) $run['id'], $rows );
 		$scope['excluded_by_reason'] = $frozen['excluded_by_reason'];
 		if ( empty( $scope['urls'] ) ) {
 			$scope['status_exclusions'] = Discovery::status_exclusions( $this->settings );
 		}
-		$this->repo->update_run(
+		$this->save_run(
 			(int) $run['id'],
 			array(
 				'phase'          => 'fetch',
@@ -288,6 +414,8 @@ class Worker {
 				'progress_utc'   => Repository::now(),
 			)
 		);
+		delete_option( self::DISCOVERY_OPTION );
+		return true;
 	}
 
 	/**
@@ -302,11 +430,11 @@ class Worker {
 		$extractor                = new Extractor();
 		$rows                     = $this->repo->pending_urls( (int) $run['id'], 20 );
 		if ( empty( $rows ) ) {
-			$this->repo->update_run( (int) $run['id'], array( 'phase' => 'site' ) );
+			$this->save_run( (int) $run['id'], array( 'phase' => 'site' ) );
 			return true;
 		}
 		foreach ( $rows as $row ) {
-			if ( microtime( true ) >= $deadline || $this->should_stop( $run ) ) {
+			if ( microtime( true ) >= $deadline || $this->should_stop( $run ) || $this->interrupted( $run ) ) {
 				return false;
 			}
 			$attempts = (int) $row['attempts'] + 1;
@@ -323,10 +451,43 @@ class Worker {
 			// Record the attempt before the request, so a request that kills
 			// the process is not repeated for ever.
 			$this->repo->update_run_url( (int) $row['id'], array( 'attempts' => $attempts ) );
-			$result = $fetcher->fetch( $row['url'] );
-			++$this->requests;
+			$fair        = $this->fresh;
+			$this->fresh = false;
+			$resume      = self::page_resume( (int) $run['id'], (int) $row['id'] );
+			$result      = $fetcher->fetch( $row['url'], 'GET', false, $deadline, $resume );
+			if ( $result['attempts'] > 0 ) {
+				++$this->requests;
+				SelfFetch::record( (int) $run['id'], $result, $this->timeout );
+			}
+			if ( 'deferred' === $result['outcome'] ) {
+				// The URL stays first in line and the next slice continues
+				// the fetch from the hop or retry it reached (branch review
+				// S1). Only a deferral with the whole slice and no request
+				// counts as an attempt.
+				$this->cut_short = true;
+				update_option(
+					self::PAGE_RESUME_OPTION,
+					array(
+						'run_id' => (int) $run['id'],
+						'url_id' => (int) $row['id'],
+						'resume' => $result['resume'],
+					),
+					false
+				);
+				if ( ! Fetcher::deferral_counts( $result, $fair ) ) {
+					$this->repo->update_run_url( (int) $row['id'], array( 'attempts' => $attempts - 1 ) );
+					return false;
+				}
+				if ( $attempts < self::MAX_URL_ATTEMPTS ) {
+					return false;
+				}
+				$result = self::settle_deferral( $result );
+			}
+			if ( ! empty( $resume ) ) {
+				delete_option( self::PAGE_RESUME_OPTION );
+			}
 			$this->record_page( $run, $row, $result, $extractor, $policy );
-			$this->repo->update_run(
+			$this->save_run(
 				(int) $run['id'],
 				array(
 					'done_count'   => (int) $run['done_count'] + 1,
@@ -337,6 +498,38 @@ class Worker {
 			$this->pause( (int) $result['duration_ms'] );
 		}
 		return true;
+	}
+
+	/**
+	 * The resume state of a page fetch an earlier slice deferred, if it is
+	 * for this run and URL (branch review S1).
+	 *
+	 * @param int $run_id Run ID.
+	 * @param int $url_id Run URL row ID.
+	 * @return array
+	 */
+	private static function page_resume( $run_id, $url_id ) {
+		$saved = get_option( self::PAGE_RESUME_OPTION );
+		if ( ! is_array( $saved ) || ! isset( $saved['run_id'], $saved['url_id'], $saved['resume'] ) || (int) $saved['run_id'] !== $run_id || (int) $saved['url_id'] !== $url_id ) {
+			return array();
+		}
+		return (array) $saved['resume'];
+	}
+
+	/**
+	 * The outcome recorded for a URL or file deferred on its last attempt,
+	 * each of them with a whole slice to itself (a redirect chain or retries
+	 * longer than a slice): an error with reason budget_spent, counted as
+	 * unread.
+	 *
+	 * @param array $result Fetch result with outcome deferred.
+	 * @return array
+	 */
+	private static function settle_deferral( array $result ) {
+		unset( $result['resume'] );
+		$result['outcome'] = 'error';
+		$result['reason']  = 'budget_spent';
+		return $result;
 	}
 
 	/**
@@ -473,6 +666,20 @@ class Worker {
 	}
 
 	/**
+	 * The evidence refs to store on a site-wide issue found in this run.
+	 *
+	 * @param array $occ      Occurrence (site_wide, issue_key).
+	 * @param array $evidence issue_key => refs, from SiteRules::evidence().
+	 * @return string JSON list, or '' for a page issue.
+	 */
+	private static function evidence_json( array $occ, array $evidence ) {
+		if ( ! (int) $occ['site_wide'] || empty( $evidence[ $occ['issue_key'] ] ) ) {
+			return '';
+		}
+		return (string) wp_json_encode( $evidence[ $occ['issue_key'] ] );
+	}
+
+	/**
 	 * Whether a run covers the full scope, so site-wide rules can run.
 	 *
 	 * @param array $run Run.
@@ -502,7 +709,7 @@ class Worker {
 			$summary['resources']      = SiteRules::resources( $facts );
 			$summary['resource_index'] = 0;
 		}
-		$this->repo->update_run(
+		$this->save_run(
 			(int) $run['id'],
 			array(
 				'phase'   => self::full_scope( $run ) ? 'resources' : 'reconcile',
@@ -512,7 +719,8 @@ class Worker {
 	}
 
 	/**
-	 * Check each distinct own-host image and logo once (URL-004).
+	 * Check each distinct own-host image, logo and sameAs profile link once
+	 * (URL-004 and URL-008).
 	 *
 	 * @param array $run      Run.
 	 * @param float $deadline Deadline.
@@ -528,14 +736,86 @@ class Worker {
 		$broken            = isset( $summary['resources_broken'] ) ? (int) $summary['resources_broken'] : 0;
 
 		$total = count( $urls );
-		while ( $index < $total && microtime( true ) < $deadline && ! $this->should_stop( $run ) ) {
-			$url    = $urls[ $index ];
-			$result = $fetcher->fetch( $url, 'HEAD' );
-			++$this->requests;
-			if ( in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
-				$result = $fetcher->fetch( $url );
-				++$this->requests;
+		while ( $index < $total && microtime( true ) < $deadline && ! $this->should_stop( $run ) && ! $this->interrupted( $run ) ) {
+			$url = $urls[ $index ];
+			// Record the attempt before the request, as for pages, so a file
+			// that kills the process is not requested for ever.
+			$attempt = ( isset( $summary['resource_attempt_index'] ) && (int) $summary['resource_attempt_index'] === $index ) ? (int) $summary['resource_attempts'] + 1 : 1;
+			if ( $attempt > self::MAX_URL_ATTEMPTS ) {
+				$result = array(
+					'outcome'     => 'error',
+					'reason'      => 'worker_stopped',
+					'status'      => 0,
+					'duration_ms' => 0,
+				);
+			} else {
+				$summary['resource_attempt_index'] = $index;
+				$summary['resource_attempts']      = $attempt;
+				$summary['resource_index']         = $index;
+				$summary['resources_broken']       = $broken;
+				$this->save_run( (int) $run['id'], array( 'summary' => (string) wp_json_encode( $summary ) ) );
+				// A sameAs profile link is a page: the normal page policy, not
+				// the wider static-file policy images and files use.
+				$is_file     = SiteRules::is_file_check( $resources[ $url ] );
+				$fair        = $this->fresh;
+				$this->fresh = false;
+				// A deferred check resumes where it stopped: the hop or retry
+				// it reached, and with the GET when the HEAD was refused
+				// (branch reviews S1 and S2).
+				$saved  = ( isset( $summary['resource_resume'] ) && (int) $summary['resource_resume']['index'] === $index ) ? $summary['resource_resume'] : array();
+				$method = isset( $saved['method'] ) && 'GET' === $saved['method'] ? 'GET' : 'HEAD';
+				$resume = isset( $saved['resume'] ) ? (array) $saved['resume'] : array();
+				unset( $summary['resource_resume'] );
+				$result = array(
+					'outcome'  => '',
+					'status'   => 0,
+					'attempts' => 0,
+				);
+				if ( 'HEAD' === $method ) {
+					$result = $fetcher->fetch( $url, 'HEAD', $is_file, $deadline, $resume );
+					if ( $result['attempts'] > 0 ) {
+						++$this->requests;
+					}
+					$resume = array();
+				}
+				if ( 'GET' === $method || in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
+					$head_attempts = 'HEAD' === $method ? (int) $result['attempts'] : 0;
+					$method        = 'GET';
+					$result        = $fetcher->fetch( $url, 'GET', $is_file, $deadline, $resume );
+					if ( $result['attempts'] > 0 ) {
+						++$this->requests;
+					}
+					// The HEAD was a request: HEAD and GET are one accounted
+					// attempt, so a GET deferred after a slow refusal does not
+					// count and the next slice starts with the GET (S2).
+					$result['attempts'] = (int) $result['attempts'] + $head_attempts;
+					// The check asks only whether the file or page exists: a
+					// 2xx answer to the GET proves it, even with its body over
+					// the size cap (branch review R3).
+					if ( 'too_large' === $result['outcome'] && (int) $result['status'] >= 200 && (int) $result['status'] < 300 ) {
+						$result['outcome'] = 'ok';
+					}
+				}
+				if ( 'deferred' === $result['outcome'] ) {
+					// As for pages: only a deferral with the whole slice and
+					// no request counts.
+					$this->cut_short            = true;
+					$summary['resource_resume'] = array(
+						'index'  => $index,
+						'method' => $method,
+						'resume' => $result['resume'],
+					);
+					if ( ! Fetcher::deferral_counts( $result, $fair ) ) {
+						$summary['resource_attempts'] = $attempt - 1;
+						break;
+					}
+					if ( $attempt < self::MAX_URL_ATTEMPTS ) {
+						break;
+					}
+					$result = self::settle_deferral( $result );
+				}
 			}
+			$summary['resource_outcomes'][ $url ] = $result['outcome'];
 			if ( in_array( $result['outcome'], array( 'not_found', 'gone' ), true ) ) {
 				++$broken;
 				foreach ( $resources[ $url ] as $where ) {
@@ -551,10 +831,9 @@ class Worker {
 		$summary['resources_broken'] = $broken;
 		$done                        = $index >= count( $urls );
 		if ( $done ) {
-			$summary['resources_checked'] = count( $urls );
-			unset( $summary['resources'] );
+			unset( $summary['resources'], $summary['resource_attempt_index'], $summary['resource_attempts'], $summary['resource_resume'] );
 		}
-		$this->repo->update_run(
+		$this->save_run(
 			(int) $run['id'],
 			array(
 				'phase'   => $done ? 'reconcile' : 'resources',
@@ -586,95 +865,205 @@ class Worker {
 		foreach ( $coverage as $key => $info ) {
 			$pages[ $key ] = $info['coverage'];
 		}
+		$summary   = Repository::decode( $run['summary'] );
+		$evidence  = array();
+		$resources = array();
+		$gone      = array();
+		$issues    = $this->repo->issues_by_key();
+		if ( self::full_scope( $run ) ) {
+			$facts     = $this->repo->page_facts( $run_id );
+			$listed    = $this->repo->url_index( $run_id );
+			$evidence  = SiteRules::evidence( $facts, $listed );
+			$resources = SiteRules::resource_outcomes( $facts, isset( $summary['resource_outcomes'] ) ? (array) $summary['resource_outcomes'] : array() );
+			$gone      = $this->gone_pages( $issues, $pages, $listed );
+		}
 		$fingerprint = Repository::decode( $run['fingerprint'] );
 		$prior       = $baseline ? Repository::decode( $baseline['fingerprint'] ) : array();
-		$issues      = $this->repo->issues_by_key();
-		$result      = Comparator::reconcile( $issues, $findings, $pages, $fingerprint, $prior, self::full_scope( $run ) );
+		$result      = Comparator::reconcile( $issues, $findings, $pages, $fingerprint, $prior, self::full_scope( $run ), $resources, $gone );
 		$now         = Repository::now();
 		$is_baseline = empty( $prior );
 
-		foreach ( $result['insert'] as $key => $fields ) {
-			$occ = $current[ $key ];
-			$id  = $this->repo->insert_issue(
-				array(
-					'issue_key'            => $key,
-					'page_url'             => $occ['site_wide'] ? '' : substr( $occ['page_url'], 0, 2048 ),
-					'site_wide'            => (int) $occ['site_wide'],
-					'rule_id'              => $occ['rule_id'],
-					'rule_version'         => (int) $occ['rule_version'],
-					'severity'             => $occ['severity'],
-					'entity_key'           => $occ['entity_key'],
-					'property'             => $occ['property'],
-					'first_run_id'         => $run_id,
-					'last_run_id'          => $run_id,
-					'first_observed_utc'   => $now,
-					'last_observed_utc'    => $now,
-					'verification_state'   => $fields['verification_state'],
-					'verification_run_id'  => $run_id,
-					'change_reason'        => $fields['change_reason'],
-					'observed_hash'        => $fields['observed_hash'],
-					'latest_occurrence_id' => (int) $occ['id'],
-					'work_status'          => 'open',
-					'updated_utc'          => $now,
-				)
-			);
-			$this->repo->link_occurrences( $run_id, $key, $id );
-			if ( ! $is_baseline ) {
-				$this->repo->log_event( 'detected', array( 'reason' => $fields['change_reason'] ), 0, 'issue', $id, $run_id );
-			}
-		}
-
-		foreach ( $result['update'] as $key => $fields ) {
-			$issue = $issues[ $key ];
-			if ( isset( $current[ $key ] ) ) {
-				$fields['last_run_id']          = $run_id;
-				$fields['last_observed_utc']    = $now;
-				$fields['latest_occurrence_id'] = (int) $current[ $key ]['id'];
-				$fields['severity']             = $current[ $key ]['severity'];
-				$this->repo->link_occurrences( $run_id, $key, (int) $issue['id'] );
-			}
-			if ( isset( $fields['verification_state'] ) ) {
-				$fields['verification_run_id'] = $run_id;
-				if ( $fields['verification_state'] !== $issue['verification_state'] ) {
-					$this->repo->log_event(
-						'verification',
-						array(
-							'from' => $issue['verification_state'],
-							'to'   => $fields['verification_state'],
-						),
-						0,
-						'issue',
-						(int) $issue['id'],
-						$run_id
-					);
+		// The register writes and the move to notify are one transaction,
+		// committed only if the run is still running when it moves on: a
+		// cancel saved meanwhile rolls the step back (branch review R4).
+		// Once committed, the run can no longer be cancelled (cancel_run).
+		$this->repo->begin();
+		try {
+			foreach ( $result['insert'] as $key => $fields ) {
+				$occ = $current[ $key ];
+				$id  = $this->repo->insert_issue(
+					array(
+						'issue_key'            => $key,
+						'page_url'             => $occ['site_wide'] ? '' : substr( $occ['page_url'], 0, 2048 ),
+						'site_wide'            => (int) $occ['site_wide'],
+						'rule_id'              => $occ['rule_id'],
+						'rule_version'         => (int) $occ['rule_version'],
+						'severity'             => $occ['severity'],
+						'entity_key'           => $occ['entity_key'],
+						'property'             => $occ['property'],
+						'first_run_id'         => $run_id,
+						'last_run_id'          => $run_id,
+						'first_observed_utc'   => $now,
+						'last_observed_utc'    => $now,
+						'verification_state'   => $fields['verification_state'],
+						'verification_run_id'  => $run_id,
+						'change_reason'        => $fields['change_reason'],
+						'observed_hash'        => $fields['observed_hash'],
+						'latest_occurrence_id' => (int) $occ['id'],
+						'evidence'             => self::evidence_json( $occ, $evidence ),
+						'work_status'          => 'open',
+						'updated_utc'          => $now,
+					)
+				);
+				$this->repo->link_occurrences( $run_id, $key, $id );
+				if ( ! $is_baseline ) {
+					$this->repo->log_event( 'detected', array( 'reason' => $fields['change_reason'] ), 0, 'issue', $id, $run_id );
 				}
 			}
-			$this->repo->update_issue( (int) $issue['id'], $fields );
+
+			foreach ( $result['update'] as $key => $fields ) {
+				$issue = $issues[ $key ];
+				if ( isset( $current[ $key ] ) ) {
+					$fields['last_run_id']          = $run_id;
+					$fields['last_observed_utc']    = $now;
+					$fields['latest_occurrence_id'] = (int) $current[ $key ]['id'];
+					$fields['severity']             = $current[ $key ]['severity'];
+					if ( $current[ $key ]['site_wide'] ) {
+						$fields['evidence'] = self::evidence_json( $current[ $key ], $evidence );
+					}
+					$this->repo->link_occurrences( $run_id, $key, (int) $issue['id'] );
+				}
+				if ( isset( $fields['verification_state'] ) ) {
+					$fields['verification_run_id'] = $run_id;
+					if ( $fields['verification_state'] !== $issue['verification_state'] ) {
+						$this->repo->log_event(
+							'verification',
+							array(
+								'from' => $issue['verification_state'],
+								'to'   => $fields['verification_state'],
+							),
+							0,
+							'issue',
+							(int) $issue['id'],
+							$run_id
+						);
+					}
+				}
+				$this->repo->update_issue( (int) $issue['id'], $fields );
+			}
+			foreach ( $result['events'] as $event ) {
+				list( $key, $type, $message ) = $event;
+				if ( isset( $issues[ $key ] ) ) {
+					$this->repo->log_event( $type, array( 'message' => $message ), 0, 'issue', (int) $issues[ $key ]['id'], $run_id );
+				}
+			}
+
+			// Coverage figure (read-only): how many audits in a row each issue
+			// has been held as unavailable, so repeated "unavailable" shows up
+			// as a coverage problem and not as quiet stability.
+			$unavailable_ids = array();
+			foreach ( $result['unavailable'] as $key ) {
+				$unavailable_ids[] = (int) $issues[ $key ]['id'];
+			}
+			$still = array();
+			foreach ( $issues as $key => $issue ) {
+				$state = isset( $result['update'][ $key ]['verification_state'] ) ? $result['update'][ $key ]['verification_state'] : $issue['verification_state'];
+				if ( 'unavailable' === $state && ! isset( $current[ $key ] ) ) {
+					$still[] = (int) $issue['id'];
+				}
+			}
+			$previous                       = $this->repo->previous_finished_summary( $run_id );
+			$streaks                        = Comparator::unavailable_streaks( isset( $previous['unavailable_streaks'] ) ? (array) $previous['unavailable_streaks'] : array(), $unavailable_ids, $still );
+			$summary['unavailable_streaks'] = $streaks;
+			$summary['repeat_unavailable']  = Comparator::repeat_unavailable( $streaks, $unavailable_ids );
+
+			unset( $summary['resource_outcomes'] );
+			$summary['register']    = $result['summary'];
+			$summary['coverage']    = $this->repo->coverage_counts( $run_id );
+			$summary['severity']    = $this->repo->severity_counts( $run_id );
+			$summary['findings']    = count( $current );
+			$summary['is_baseline'] = $is_baseline;
+			if ( self::full_scope( $run ) ) {
+				$summary['resource_checks'] = SiteRules::resource_counts( $resources );
+			}
+			if ( $baseline && self::full_scope( $run ) ) {
+				$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage, $resources, $gone );
+			}
+			$saved = $this->save_run(
+				$run_id,
+				array(
+					'phase'           => 'notify',
+					'baseline_run_id' => $baseline ? (int) $baseline['id'] : 0,
+					'summary'         => (string) wp_json_encode( $summary ),
+				)
+			);
+		} catch ( \Throwable $e ) {
+			$this->repo->rollback();
+			throw $e;
 		}
-		foreach ( $result['events'] as $event ) {
-			list( $key, $type, $message ) = $event;
-			if ( isset( $issues[ $key ] ) ) {
-				$this->repo->log_event( $type, array( 'message' => $message ), 0, 'issue', (int) $issues[ $key ]['id'], $run_id );
+		if ( $saved ) {
+			$this->repo->commit();
+		} else {
+			// Cancelled while reconciling: none of this step's register
+			// writes stand, so a cancelled run never changes the register.
+			$this->repo->rollback();
+		}
+	}
+
+	/**
+	 * Evidence pages of active site-wide issues that a full-scope run did not
+	 * list and that an earlier run listed as a WordPress post which is no
+	 * longer published (unpublished, trashed or deleted), with no other
+	 * published post at the same URL (branch review S4). Such a page has
+	 * left the site, so it settles its part of the evidence, as a page
+	 * answering 404 does. Anything else not listed is held: a page the run
+	 * excluded (URL cap, policy, password), a published post outside the
+	 * configured post types, and a URL that was never known as a post (a
+	 * sitemap-only URL may only be missing because sitemap discovery was
+	 * switched off). Narrowed coverage never clears an issue (finding 2;
+	 * branch review R2).
+	 *
+	 * @param array $issues issue_key => issue row.
+	 * @param array $pages  url_key => coverage for this run (excluded rows left out).
+	 * @param array $listed Run URL id => URL, every URL this run listed (excluded rows too).
+	 * @return array url_key => true
+	 */
+	private function gone_pages( array $issues, array $pages, array $listed ) {
+		$known = array();
+		foreach ( $listed as $url ) {
+			$known[ Evaluator::url_key( $url ) ] = true;
+		}
+		$gone = array();
+		foreach ( $issues as $issue ) {
+			if ( empty( $issue['site_wide'] ) || ! in_array( $issue['verification_state'], Comparator::ACTIVE_STATES, true ) ) {
+				continue;
+			}
+			foreach ( Comparator::refs( $issue, $pages ) as $ref ) {
+				if ( 0 === strpos( $ref, 'resource:' ) || isset( $pages[ $ref ] ) || isset( $known[ $ref ] ) || isset( $gone[ $ref ] ) ) {
+					continue;
+				}
+				$post_id = $this->repo->last_post_id_for( $ref );
+				if ( $post_id && 'publish' !== get_post_status( $post_id ) && ! self::url_still_published( $ref ) ) {
+					$gone[ $ref ] = true;
+				}
 			}
 		}
+		return $gone;
+	}
 
-		$summary                = Repository::decode( $run['summary'] );
-		$summary['register']    = $result['summary'];
-		$summary['coverage']    = $this->repo->coverage_counts( $run_id );
-		$summary['severity']    = $this->repo->severity_counts( $run_id );
-		$summary['findings']    = count( $current );
-		$summary['is_baseline'] = $is_baseline;
-		if ( $baseline && self::full_scope( $run ) ) {
-			$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage );
-		}
-		$this->repo->update_run(
-			$run_id,
-			array(
-				'phase'           => 'notify',
-				'baseline_run_id' => $baseline ? (int) $baseline['id'] : 0,
-				'summary'         => (string) wp_json_encode( $summary ),
-			)
-		);
+	/**
+	 * Whether WordPress still serves a published post, of any post type, at
+	 * a URL key: a page deleted and replaced at the same permalink by a post
+	 * of a type the audit does not cover is held, not gone (branch review
+	 * S4).
+	 *
+	 * @param string $key URL key (Evaluator::url_key()).
+	 * @return bool
+	 */
+	private static function url_still_published( $key ) {
+		$scheme  = (string) wp_parse_url( home_url(), PHP_URL_SCHEME );
+		$post_id = url_to_postid( ( '' !== $scheme ? $scheme : 'https' ) . '://' . $key . ( false === strpos( $key, '?' ) ? '/' : '' ) );
+		return $post_id > 0 && 'publish' === get_post_status( $post_id );
 	}
 
 	/**
@@ -683,11 +1072,18 @@ class Worker {
 	 * @param array $baseline Baseline run.
 	 * @param int   $run_id   Run ID.
 	 * @param array $current  Current occurrences by key.
-	 * @param array $coverage Current coverage map.
+	 * @param array $coverage  Current coverage map.
+	 * @param array $resources Resource URL => check outcome for this run.
+	 * @param array $gone      Evidence pages that have left the site (gone_pages()).
 	 * @return array
 	 */
-	private function comparison_counts( array $baseline, $run_id, array $current, array $coverage ) {
-		$shape  = static function ( array $occurrences, array $pages, $fingerprint ) {
+	private function comparison_counts( array $baseline, $run_id, array $current, array $coverage, array $resources, array $gone ) {
+		$issues = $this->repo->issues_by_key();
+		$pages  = array();
+		foreach ( $coverage as $key => $info ) {
+			$pages[ $key ] = $info['coverage'];
+		}
+		$shape = static function ( array $occurrences, array $map, $fingerprint ) use ( $issues, $pages ) {
 			$findings = array();
 			foreach ( $occurrences as $key => $occ ) {
 				$findings[ $key ] = array(
@@ -695,18 +1091,25 @@ class Worker {
 					'rule_id' => $occ['rule_id'],
 					'page'    => $occ['site_wide'] ? '' : Evaluator::url_key( $occ['page_url'] ),
 				);
+				if ( $occ['site_wide'] ) {
+					$findings[ $key ]['refs'] = isset( $issues[ $key ] ) ? Comparator::refs( $issues[ $key ], $pages ) : array();
+				}
 			}
 			return array(
 				'findings'    => $findings,
-				'pages'       => $pages,
+				'pages'       => $map,
 				'fingerprint' => $fingerprint,
 			);
 		};
+
 		$before = $shape( $this->repo->occurrences_by_key( (int) $baseline['id'] ), $this->repo->coverage_map( (int) $baseline['id'] ), Repository::decode( $baseline['fingerprint'] ) );
 		$run    = $this->repo->get_run( $run_id );
 		$after  = $shape( $current, $coverage, Repository::decode( $run['fingerprint'] ) );
 		$ever   = array();
-		foreach ( $this->repo->issues_by_key() as $key => $issue ) {
+
+		$after['resources'] = $resources;
+		$after['gone']      = $gone;
+		foreach ( $issues as $key => $issue ) {
 			if ( (int) $issue['first_run_id'] < (int) $baseline['id'] ) {
 				$ever[ $key ] = true;
 			}
@@ -738,10 +1141,11 @@ class Worker {
 		} elseif ( $unknown > 0 ) {
 			$state = 'partial';
 		}
-		$this->finish( $run, $state );
-		$run = $this->repo->get_run( (int) $run['id'] );
-		if ( 'monthly' === $run['run_type'] ) {
-			Outbox::queue_for_run( $run );
+		if ( $this->finish( $run, $state ) ) {
+			$run = $this->repo->get_run( (int) $run['id'] );
+			if ( 'monthly' === $run['run_type'] ) {
+				Outbox::queue_for_run( $run );
+			}
 		}
 		Retention::apply();
 	}
@@ -752,10 +1156,12 @@ class Worker {
 	 * @param array  $run   Run.
 	 * @param string $state Final state.
 	 * @param array  $extra Extra summary fields.
+	 * @return bool False when the run was no longer running (cancelled meanwhile).
 	 */
 	private function finish( array $run, $state, array $extra = array() ) {
+		delete_option( self::DISCOVERY_OPTION );
 		$summary = array_merge( Repository::decode( $run['summary'] ), $extra );
-		$this->repo->update_run(
+		$closed  = $this->save_run(
 			(int) $run['id'],
 			array(
 				'state'        => $state,
@@ -764,7 +1170,35 @@ class Worker {
 				'summary'      => (string) wp_json_encode( $summary ),
 			)
 		);
-		$this->repo->log_event( 'run_finished', array( 'state' => $state ), 0, 'run', (int) $run['id'], (int) $run['id'] );
+		if ( $closed ) {
+			$this->repo->log_event( 'run_finished', array( 'state' => $state ), 0, 'run', (int) $run['id'], (int) $run['id'] );
+		}
+		return $closed;
+	}
+
+	/**
+	 * Save fields on this run only while it is still running. A run
+	 * cancelled from the audit screen while this worker was part way
+	 * through a step stays cancelled (second review, BUG-5).
+	 *
+	 * @param int   $run_id Run ID.
+	 * @param array $fields Fields.
+	 * @return bool Whether the run was still running.
+	 */
+	private function save_run( $run_id, array $fields ) {
+		return $this->repo->update_run_in_state( (int) $run_id, 'running', $fields );
+	}
+
+	/**
+	 * Whether the run has left the running state since this step began,
+	 * for example cancelled from the audit screen. Checked before each
+	 * request, so a cancel stops the requests too.
+	 *
+	 * @param array $run Run.
+	 * @return bool
+	 */
+	private function interrupted( array $run ) {
+		return 'running' !== $this->repo->run_state( (int) $run['id'] );
 	}
 
 	/**
@@ -783,6 +1217,7 @@ class Worker {
 			'phase'  => $run ? $run['phase'] : '',
 			'done'   => $run ? (int) $run['done_count'] : 0,
 			'total'  => $run ? (int) $run['url_count'] : 0,
+			'stall'  => SelfFetch::detected( $run_id ) ? SelfFetch::message() : '',
 		);
 	}
 }

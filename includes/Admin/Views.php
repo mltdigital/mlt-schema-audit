@@ -90,6 +90,9 @@ class Views {
 		if ( Settings::constant_disabled() ) {
 			echo '<div class="notice notice-warning"><p>' . esc_html__( 'MLTSA_DISABLE is set: scheduling, mail and manual audits are stopped.', 'mlt-schema-audit' ) . '</p></div>';
 		}
+		if ( \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			echo '<div class="notice notice-error"><p>' . esc_html( \MLT\SchemaAudit\Installer::upgrade_message() ) . '</p></div>';
+		}
 		echo '<p class="mltsa-coverage">' . esc_html( Labels::COVERAGE_STATEMENT ) . '</p>';
 	}
 
@@ -145,6 +148,16 @@ class Views {
 		$active = $repo->active_run();
 		if ( $active ) {
 			self::progress( $active );
+		} elseif ( \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			echo '<p>' . esc_html__( 'Audits cannot start until the database upgrade completes (see the message above and the Health screen).', 'mlt-schema-audit' ) . '</p>';
+		} elseif ( ! Settings::scope_confirmed() ) {
+			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'Audits cannot run yet: nobody has confirmed which pages the audit should read.', 'mlt-schema-audit' ) . ' ';
+			if ( current_user_can( 'mltsa_manage' ) ) {
+				echo '<a href="' . esc_url( self::url( 'mltsa-settings' ) . '#mltsa-step-scope' ) . '">' . esc_html__( 'Confirm the scope on the Settings screen.', 'mlt-schema-audit' ) . '</a>';
+			} else {
+				echo esc_html__( 'Ask someone who manages the plugin settings to confirm the scope.', 'mlt-schema-audit' );
+			}
+			echo '</p></div>';
 		} else {
 			echo '<p>' . esc_html__( 'Run a manual audit of this site now. It reads each page in scope one at a time and never changes the site.', 'mlt-schema-audit' ) . '</p>';
 			self::button_form( 'mltsa_start', __( 'Start audit', 'mlt-schema-audit' ) );
@@ -185,6 +198,8 @@ class Views {
 		echo '<p><strong>' . esc_html( sprintf( 'Audit #%d is %s.', (int) $run['id'], strtolower( Labels::of( Labels::RUN_STATES, $run['state'] ) ) ) ) . '</strong> ';
 		echo '<span id="mltsa-progress-text">' . esc_html( sprintf( '%d of %d pages, phase: %s', (int) $run['done_count'], (int) $run['url_count'], $run['phase'] ) ) . '</span></p>';
 		echo '<div class="mltsa-bar"><div class="mltsa-bar-fill" id="mltsa-bar-fill" style="width:' . (int) $pct . '%"></div></div>';
+		$stall = \MLT\SchemaAudit\Ops\SelfFetch::detected( (int) $run['id'] );
+		echo '<div class="notice notice-warning inline" id="mltsa-stall"' . ( $stall ? '' : ' hidden' ) . '><p id="mltsa-stall-text">' . esc_html( $stall ? \MLT\SchemaAudit\Ops\SelfFetch::message() : '' ) . '</p></div>';
 		echo '<p class="description">' . esc_html__( 'Keeping this screen open moves the audit along; it also continues through the scheduler.', 'mlt-schema-audit' ) . '</p>';
 		if ( current_user_can( 'mltsa_manage' ) ) {
 			self::button_form( 'mltsa_cancel', __( 'Cancel audit', 'mlt-schema-audit' ), array(), 'button' );
@@ -238,8 +253,43 @@ class Views {
 			}
 			echo '</ul>';
 		}
-		if ( ! empty( $scope['excluded_by_reason'] ) || ! empty( $scope['status_exclusions'] ) ) {
+		if ( ! empty( $summary['resource_checks'] ) ) {
+			$checks = (array) $summary['resource_checks'];
+			echo '<h3>' . esc_html__( 'Images, logos and profile links on this site', 'mlt-schema-audit' ) . '</h3><ul class="mltsa-list">';
+			foreach ( Labels::RESOURCE_CHECKS as $key => $label ) {
+				echo '<li>' . esc_html( $label . ': ' . ( isset( $checks[ $key ] ) ? (int) $checks[ $key ] : 0 ) ) . '</li>';
+			}
+			echo '</ul>';
+			if ( isset( $checks['checked'], $checks['referenced'] ) && (int) $checks['checked'] < (int) $checks['referenced'] ) {
+				echo '<p class="description">' . esc_html__( 'An image or link that was not checked (blocked, timed out, unavailable or over the per-audit limit) cannot show that it was fixed, so its issue stays open.', 'mlt-schema-audit' ) . '</p>';
+			}
+		}
+		if ( isset( $summary['repeat_unavailable'] ) && is_array( $summary['repeat_unavailable'] ) ) {
+			$repeat  = $summary['repeat_unavailable'];
+			$streaks = isset( $summary['unavailable_streaks'] ) ? (array) $summary['unavailable_streaks'] : array();
+			echo '<h3>' . esc_html__( 'Findings that could not be checked', 'mlt-schema-audit' ) . '</h3><ul class="mltsa-list">';
+			echo '<li>' . esc_html( Labels::REPEAT_UNAVAILABLE['this_run'] . ': ' . ( isset( $summary['register']['unavailable'] ) ? (int) $summary['register']['unavailable'] : 0 ) ) . '</li>';
+			echo '<li>' . esc_html( sprintf( Labels::REPEAT_UNAVAILABLE['issues'], (int) $repeat['min_runs'] ) . ': ' . (int) $repeat['issues'] ) . '</li>';
+			if ( (int) $repeat['issues'] > 0 ) {
+				echo '<li>' . esc_html( Labels::REPEAT_UNAVAILABLE['longest'] . ': ' . (int) $repeat['longest'] ) . '</li>';
+			}
+			echo '</ul>';
+			if ( ! empty( $repeat['ids'] ) ) {
+				echo '<p>';
+				foreach ( (array) $repeat['ids'] as $issue_id ) {
+					$n = isset( $streaks[ $issue_id ] ) ? (int) $streaks[ $issue_id ] : 0;
+					echo '<a href="' . esc_url( self::url( 'mltsa-findings', array( 'issue' => (int) $issue_id ) ) ) . '">' . esc_html( sprintf( '#%d (%d audits)', (int) $issue_id, $n ) ) . '</a> ';
+				}
+				echo '</p>';
+				echo '<p class="description">' . esc_html__( 'These findings could not be confirmed or cleared in several audits in a row, so part of the site is not being checked. Look at why their pages or images could not be read, or whether a page they rest on is outside the audit (see the history of each issue). This figure does not change their status.', 'mlt-schema-audit' ) . '</p>';
+			}
+		}
+		if ( ! empty( $scope['excluded_by_reason'] ) || ! empty( $scope['status_exclusions'] ) || ! empty( $scope['sitemaps_not_read'] ) ) {
 			echo '<h3>' . esc_html__( 'Left out, with reasons', 'mlt-schema-audit' ) . '</h3><ul class="mltsa-list">';
+			if ( ! empty( $scope['sitemaps_not_read'] ) ) {
+				/* translators: %d: number of sitemaps. */
+				echo '<li>' . esc_html( sprintf( __( 'Sitemaps that could not be read (their pages may be missing from this audit): %d', 'mlt-schema-audit' ), (int) $scope['sitemaps_not_read'] ) ) . '</li>';
+			}
 			foreach ( array_merge( (array) ( isset( $scope['excluded_by_reason'] ) ? $scope['excluded_by_reason'] : array() ), (array) ( isset( $scope['status_exclusions'] ) ? $scope['status_exclusions'] : array() ) ) as $reason => $n ) {
 				echo '<li>' . esc_html( str_replace( '_', ' ', $reason ) . ': ' . (int) $n ) . '</li>';
 			}
@@ -248,15 +298,17 @@ class Views {
 		if ( ! empty( $summary['comparison'] ) ) {
 			echo '<h2>' . esc_html__( 'Compared with the previous audit', 'mlt-schema-audit' ) . '</h2><ul class="mltsa-list">';
 			$labels = array(
-				'new'             => 'New findings',
-				'new_rule_change' => 'New because a rule changed (not a website change)',
-				'returned'        => 'Returned',
-				'changed'         => 'Changed',
-				'resolved'        => 'No longer detected',
-				'markup_changed'  => 'Pages with changed markup',
-				'pages_added'     => 'Pages added',
-				'pages_removed'   => 'Pages removed',
-				'coverage_lost'   => 'Pages read last time but not this time',
+				'new'                 => 'New findings',
+				'new_rule_change'     => 'New because a rule changed (not a website change)',
+				'returned'            => 'Returned',
+				'changed'             => 'Changed',
+				'changed_rule_change' => 'Changed because a rule changed (not a website change)',
+				'resolved'            => 'No longer detected',
+				'held_rule_change'    => 'Not reported this time because a rule changed or was removed (not a fix)',
+				'markup_changed'      => 'Pages with changed markup',
+				'pages_added'         => 'Pages added',
+				'pages_removed'       => 'Pages removed',
+				'coverage_lost'       => 'Pages read last time but not this time',
 			);
 			foreach ( $labels as $key => $label ) {
 				echo '<li>' . esc_html( $label . ': ' . ( isset( $summary['comparison'][ $key ] ) ? (int) $summary['comparison'][ $key ] : 0 ) ) . '</li>';
@@ -428,9 +480,12 @@ class Views {
 		$total           = $repo->count_findings( $run_id, $query );
 		$rows            = $repo->findings( $run_id, $query, self::PER_PAGE, ( $paged - 1 ) * self::PER_PAGE );
 		$filtered        = array_filter( $filter, 'strlen' );
+		// The export carries the search too, so it holds what the screen shows.
+		$export_filter = array_filter( array_merge( $filter, array( 'search' => $search ) ), 'strlen' );
 
+		echo '<p class="description">' . esc_html( sprintf( 'This lists what audit #%d read. For every issue across all audits, open the ', $run_id ) ) . '<a href="' . esc_url( self::url( 'mltsa-register' ) ) . '">' . esc_html__( 'issue register', 'mlt-schema-audit' ) . '</a>.</p>';
 		echo '<p>' . esc_html( sprintf( '%d findings in audit #%d (%s).', $total, $run_id, Labels::of( Labels::RUN_STATES, $run['state'] ) ) ) . ' ';
-		echo '<a href="' . esc_url( self::export_url( $run_id, 'zip', $filtered ) ) . '">' . esc_html( empty( $filtered ) ? 'Download ZIP' : 'Download ZIP of this filtered view' ) . '</a></p>';
+		echo '<a href="' . esc_url( self::export_url( $run_id, 'zip', $export_filter ) ) . '">' . esc_html( empty( $export_filter ) ? 'Download ZIP' : 'Download ZIP of this filtered view' ) . '</a></p>';
 		if ( 'complete' !== $run['state'] ) {
 			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'This audit did not read every page, so pages it missed show no findings. That is not an all-clear.', 'mlt-schema-audit' ) . '</p></div>';
 		}
@@ -467,6 +522,97 @@ class Views {
 				)
 			)
 		);
+		self::close();
+	}
+
+	/* -------------------------------------------------------------- Register */
+
+	/**
+	 * The issue register: every issue the audits have recorded, across runs, as it stands now.
+	 *
+	 * The findings screen shows what one audit saw; this one shows current issue state with the
+	 * latest evidence, so an issue is not lost because a later recheck did not cover its page.
+	 */
+	public static function register() {
+		self::require_cap( 'mltsa_audit' );
+		$repo   = new Repository();
+		$filter = array(
+			'work_status'        => self::arg_key( 'work_status' ),
+			'verification_state' => self::arg_key( 'verification_state' ),
+			'owner'              => '',
+		);
+		if ( ! isset( Labels::WORK[ $filter['work_status'] ] ) ) {
+			$filter['work_status'] = '';
+		}
+		if ( ! isset( Labels::VERIFICATION[ $filter['verification_state'] ] ) ) {
+			$filter['verification_state'] = '';
+		}
+		if ( isset( $_GET['owner'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter.
+			$owner = sanitize_text_field( wp_unslash( $_GET['owner'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			if ( 'none' === $owner ) {
+				$filter['owner'] = -1;
+			} elseif ( absint( $owner ) > 0 ) {
+				$filter['owner'] = absint( $owner );
+			}
+		}
+		$search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter.
+
+		self::open( __( 'Issue register', 'mlt-schema-audit' ) );
+		echo '<p>' . esc_html__( 'Every issue the audits have recorded, across all audits, with its current status and the latest evidence. Use Findings to see what one audit read.', 'mlt-schema-audit' ) . '</p>';
+
+		$owner_options = array(
+			''     => 'All',
+			'none' => 'Nobody',
+		);
+		foreach ( $repo->register_owner_ids() as $uid ) {
+			$user                  = get_userdata( $uid );
+			$owner_options[ $uid ] = $user ? $user->display_name : 'User #' . $uid;
+		}
+		echo '<form method="get" class="mltsa-filters"><input type="hidden" name="page" value="mltsa-register">';
+		self::select( 'work_status', 'Status', array_merge( array( '' => 'All' ), Labels::WORK ), $filter['work_status'] );
+		self::select( 'verification_state', 'Verification', array_merge( array( '' => 'All' ), Labels::VERIFICATION ), $filter['verification_state'] );
+		self::select( 'owner', 'Owner', $owner_options, -1 === $filter['owner'] ? 'none' : $filter['owner'] );
+		echo '<label>Search <input type="search" name="s" value="' . esc_attr( $search ) . '"></label> ';
+		echo '<button class="button">' . esc_html__( 'Filter', 'mlt-schema-audit' ) . '</button></form>';
+
+		$query           = $filter;
+		$query['search'] = $search;
+		$paged           = max( 1, self::arg_int( 'paged' ) );
+		$total           = $repo->count_register( $query );
+		$rows            = $repo->register( $query, self::PER_PAGE, ( $paged - 1 ) * self::PER_PAGE );
+		$catalog         = Rules::catalogue();
+
+		echo '<p>' . esc_html( sprintf( '%d issues in the register.', $total ) ) . '</p>';
+		echo '<table class="widefat striped"><thead><tr><th>Issue</th><th>Page</th><th>Severity</th><th>Observed</th><th>Status</th><th>Owner</th><th>Verification</th><th>First observed</th><th>Last observed</th></tr></thead><tbody>';
+		foreach ( $rows as $i ) {
+			$rule  = isset( $catalog[ $i['rule_id'] ] ) ? $catalog[ $i['rule_id'] ] : null;
+			$owner = (int) $i['owner_user_id'] ? get_userdata( (int) $i['owner_user_id'] ) : false;
+			echo '<tr><td><a href="' . esc_url( self::url( 'mltsa-findings', array( 'issue' => (int) $i['id'] ) ) ) . '">' . esc_html( '#' . (int) $i['id'] . ' ' . $i['rule_id'] . ' ' . ( $rule ? $rule['title'] : '' ) ) . '</a></td>';
+			echo '<td>' . esc_html( (int) $i['site_wide'] ? '(site-wide)' : $i['page_url'] ) . '</td>';
+			echo '<td>' . esc_html( Labels::of( Labels::SEVERITIES, $i['severity'] ) ) . '</td>';
+			echo '<td class="mltsa-evidence">' . esc_html( (string) $i['latest_observed'] ) . '</td>';
+			echo '<td>' . esc_html( Labels::of( Labels::WORK, (string) $i['work_status'] ) ) . ( $i['due_date'] ? '<br><span class="description">' . esc_html( 'Due ' . $i['due_date'] ) . '</span>' : '' ) . '</td>';
+			echo '<td>' . esc_html( $owner ? $owner->display_name : ( (int) $i['owner_user_id'] ? 'User #' . (int) $i['owner_user_id'] : 'Nobody' ) ) . '</td>';
+			echo '<td>' . esc_html( Labels::of( Labels::VERIFICATION, (string) $i['verification_state'] ) . ( 'rule_change' === $i['change_reason'] ? ' (rule change)' : '' ) ) . ( (int) $i['verification_run_id'] ? '<br><span class="description">' . esc_html( 'Audit #' . (int) $i['verification_run_id'] ) . '</span>' : '' ) . '</td>';
+			echo '<td>' . esc_html( self::when( $i['first_observed_utc'] ) ) . '</td>';
+			echo '<td>' . esc_html( self::when( $i['last_observed_utc'] ) ) . '</td></tr>';
+		}
+		if ( empty( $rows ) ) {
+			echo '<tr><td colspan="9">' . esc_html__( 'No issues match.', 'mlt-schema-audit' ) . '</td></tr>';
+		}
+		echo '</tbody></table>';
+		self::pager(
+			'mltsa-register',
+			$paged,
+			$total,
+			array(
+				'work_status'        => $filter['work_status'],
+				'verification_state' => $filter['verification_state'],
+				'owner'              => -1 === $filter['owner'] ? 'none' : (string) $filter['owner'],
+				's'                  => $search,
+			)
+		);
+		echo '<p class="description">' . esc_html__( 'Verification shows what the latest audit or recheck that covered the page found. An issue whose page was not read shows Unavailable or keeps its earlier state; it is not cleared.', 'mlt-schema-audit' ) . '</p>';
 		self::close();
 	}
 
@@ -597,7 +743,11 @@ class Views {
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="mltsa-form"><input type="hidden" name="action" value="mltsa_settings">';
 		wp_nonce_field( 'mltsa_settings' );
 
-		echo '<h2>' . esc_html__( 'Scope', 'mlt-schema-audit' ) . '</h2><p>' . esc_html__( 'The homepage is always audited. Choose the published content types to include. Drafts, private and password-protected content are never audited.', 'mlt-schema-audit' ) . '</p><p>';
+		self::checklist();
+
+		self::step_open( 'scope', __( 'Step 1: Audit scope', 'mlt-schema-audit' ), ! empty( $s['scope_confirmed'] ) );
+		echo '<p>' . esc_html__( 'The scope is the set of pages the audit reads. The homepage is always included. Tick the published content types to include as well; drafts, private and password-protected content are never read.', 'mlt-schema-audit' ) . '</p>';
+		echo '<p>' . esc_html__( 'Why it needs confirming: a law firm site often has content types that hold no useful schema (team members, testimonials, landing pages built by other plugins), and auditing them adds noise and time. Confirming tells the plugin someone has checked the list. No audit, manual or monthly, runs until it is confirmed, and changing the content types asks for it again.', 'mlt-schema-audit' ) . '</p><p>';
 		foreach ( get_post_types( array( 'public' => true ), 'objects' ) as $type ) {
 			if ( 'attachment' === $type->name ) {
 				continue;
@@ -607,9 +757,12 @@ class Views {
 		echo '</p>';
 		self::checkbox( 'sitemap_discovery', 'Also read URLs from this site\'s own sitemaps (capped)', $s );
 		echo '<p><label>Most pages per audit <input type="number" name="max_urls" min="1" max="5000" value="' . (int) $s['max_urls'] . '"></label></p>';
-		self::checkbox( 'scope_confirmed', 'The scope is confirmed', $s );
+		self::confirm_box( 'scope_confirmed', __( 'I have checked these content types and confirm this is the scope for this site', 'mlt-schema-audit' ), $s );
+		self::step_close();
 
-		echo '<h2>' . esc_html__( 'Monthly schedule', 'mlt-schema-audit' ) . '</h2><p>';
+		self::step_open( 'schedule', __( 'Step 2: Monthly schedule', 'mlt-schema-audit' ), ! empty( $s['schedule_confirmed'] ) );
+		echo '<p>' . esc_html__( 'Once monitoring is on, the audit runs by itself once a month at this time and emails the result.', 'mlt-schema-audit' ) . '</p>';
+		echo '<p>' . esc_html__( 'Why it needs confirming: an audit sends a request for every page in scope, so it should run when the site is quiet and not at the same moment as other sites on the same server. Changing the day or time asks for it again.', 'mlt-schema-audit' ) . '</p><p>';
 		echo '<select name="schedule_ordinal">';
 		foreach ( Settings::ORDINALS as $o ) {
 			echo '<option value="' . esc_attr( $o ) . '"' . selected( $o, $s['schedule_ordinal'], false ) . '>' . esc_html( ucfirst( $o ) ) . '</option>';
@@ -628,9 +781,13 @@ class Views {
 			$dates[] = wp_date( 'l j F Y, H:i T', $ts, new \DateTimeZone( $s['schedule_timezone'] ) );
 		}
 		echo esc_html( implode( '; ', $dates ) ) . '. ' . esc_html__( 'The time is when the audit starts; the email follows when it finishes. Stagger sites on the same server across the first week.', 'mlt-schema-audit' ) . '</p>';
-		self::checkbox( 'schedule_confirmed', 'The schedule is confirmed', $s );
+		self::confirm_box( 'schedule_confirmed', __( 'I confirm this schedule suits this site and its server', 'mlt-schema-audit' ), $s );
+		self::step_close();
 
-		echo '<h2>' . esc_html__( 'Recipients', 'mlt-schema-audit' ) . '</h2>';
+		$recipients_done = ! empty( $s['recipients'] ) && ! Settings::mail_paused();
+		self::step_open( 'recipients', __( 'Step 3: Email recipients', 'mlt-schema-audit' ), $recipients_done );
+		echo '<p>' . esc_html__( 'The people who receive the monthly email. Saving the list confirms it for this site address.', 'mlt-schema-audit' ) . '</p>';
+		echo '<p>' . esc_html__( 'Why it is tied to the site address: if this site is copied to a staging or development address, mail stops until someone confirms the recipients again there, so a copy never emails the real recipients.', 'mlt-schema-audit' ) . '</p>';
 		echo '<p><label>' . esc_html__( 'One email address per line (at most 10). The site admin address is never used.', 'mlt-schema-audit' ) . '<br><textarea name="recipients" rows="3" class="large-text">' . esc_textarea( implode( "\n", (array) $s['recipients'] ) ) . '</textarea></label></p>';
 		if ( ! empty( $s['recipients'] ) && Settings::mail_paused() ) {
 			echo '<div class="notice notice-error inline"><p>' . esc_html( sprintf( 'Mail is paused: these recipients were confirmed on %s, and this site is now %s.', $s['recipients_home'], home_url( '/' ) ) ) . '</p></div>';
@@ -639,11 +796,12 @@ class Views {
 			echo '<p class="description">' . esc_html( sprintf( 'Confirmed on %s, %s.', $s['recipients_home'], self::when( $s['recipients_confirmed_utc'] ) ) ) . '</p>';
 		}
 		self::checkbox( 'notify_no_change', 'Also email when nothing changed (off by default)', $s );
+		self::step_close();
 
 		echo '<h2>' . esc_html__( 'Monitoring', 'mlt-schema-audit' ) . '</h2>';
 		$blockers = Settings::monitoring_blockers();
 		if ( ! empty( $blockers ) && empty( $s['monitoring'] ) ) {
-			echo '<p class="description">' . esc_html( 'Before monitoring can be switched on: ' . implode( ' ', $blockers ) ) . '</p>';
+			echo '<div class="notice notice-warning inline"><p>' . esc_html( 'Monitoring cannot be switched on until the three steps above are done: ' . implode( ' ', $blockers ) ) . '</p></div>';
 		}
 		self::checkbox( 'monitoring', 'Run the monthly audit and send the email', $s );
 		self::checkbox( 'kill_switch', 'Kill switch: stop scheduling and mail now (manual audits still work)', $s );
@@ -656,10 +814,59 @@ class Views {
 		echo '<h2>' . esc_html__( 'Limits and data', 'mlt-schema-audit' ) . '</h2>';
 		echo '<p><label>Seconds between requests <input type="number" name="gap_seconds" min="0" max="30" value="' . (int) $s['gap_seconds'] . '"></label> ';
 		echo '<label>Timeout per request (seconds) <input type="number" name="timeout" min="5" max="60" value="' . (int) $s['timeout'] . '"></label></p>';
+		$in_use = \MLT\SchemaAudit\Ops\Worker::request_timeout( $s['timeout'] );
+		if ( $in_use < (int) $s['timeout'] ) {
+			/* translators: 1: timeout setting, 2: PHP time limit, 3: timeout in use. */
+			echo '<div class="notice notice-warning inline"><p>' . esc_html( sprintf( __( 'The timeout is set to %1$d seconds, but this server\'s PHP time limit (%2$d seconds) leaves room for requests of at most %3$d seconds, so audit work done through WordPress cron or the open audit screen uses %3$d. Lower the setting, raise the PHP time limit, or run audits with the server cron job (wp mltsa tick), which uses the full setting.', 'mlt-schema-audit' ), (int) $s['timeout'], (int) ini_get( 'max_execution_time' ), $in_use ) ) . '</p></div>';
+		}
 		echo '<p><label>Monthly audits kept with full evidence (at least 13) <input type="number" name="retention_runs" min="13" max="120" value="' . (int) $s['retention_runs'] . '"></label></p>';
 		self::checkbox( 'remove_data_on_uninstall', 'Remove all audit data when the plugin is deleted', $s );
 		echo '<p><button class="button button-primary">' . esc_html__( 'Save settings', 'mlt-schema-audit' ) . '</button></p></form>';
 		self::close();
+	}
+
+	/**
+	 * The set-up checklist at the top of the Settings screen.
+	 */
+	private static function checklist() {
+		$steps = Settings::setup_steps();
+		$left  = count( $steps ) - count( array_filter( wp_list_pluck( $steps, 'done' ) ) );
+		echo '<div class="mltsa-setup' . ( $left ? ' mltsa-setup-todo' : '' ) . '"><h2>' . esc_html__( 'Set-up checklist', 'mlt-schema-audit' ) . '</h2>';
+		/* translators: %d: number of set-up steps not yet done. */
+		echo '<p>' . esc_html( $left ? sprintf( _n( '%d step left. Audits cannot run until the scope is confirmed, and monitoring cannot be switched on until all three are done.', '%d steps left. Audits cannot run until the scope is confirmed, and monitoring cannot be switched on until all three are done.', $left, 'mlt-schema-audit' ), $left ) : __( 'All three steps are done. Monitoring can be switched on below.', 'mlt-schema-audit' ) ) . '</p><ol>';
+		foreach ( $steps as $step ) {
+			echo '<li class="' . ( $step['done'] ? 'mltsa-done' : 'mltsa-todo' ) . '"><span class="mltsa-state">' . esc_html( $step['done'] ? __( 'Done', 'mlt-schema-audit' ) : __( 'To do', 'mlt-schema-audit' ) ) . '</span> <a href="#mltsa-step-' . esc_attr( $step['id'] ) . '">' . esc_html( $step['title'] ) . '</a></li>';
+		}
+		echo '</ol></div>';
+	}
+
+	/**
+	 * Open a set-up step: heading with its state.
+	 *
+	 * @param string $id    Step ID.
+	 * @param string $title Heading.
+	 * @param bool   $done  Whether the step is done.
+	 */
+	private static function step_open( $id, $title, $done ) {
+		echo '<div class="mltsa-step ' . ( $done ? 'mltsa-done' : 'mltsa-todo' ) . '" id="mltsa-step-' . esc_attr( $id ) . '"><h2>' . esc_html( $title ) . ' <span class="mltsa-state">' . esc_html( $done ? __( 'Done', 'mlt-schema-audit' ) : __( 'To do', 'mlt-schema-audit' ) ) . '</span></h2>';
+	}
+
+	/**
+	 * Close a set-up step.
+	 */
+	private static function step_close() {
+		echo '</div>';
+	}
+
+	/**
+	 * A confirmation checkbox, set apart from the step's other fields.
+	 *
+	 * @param string $name  Setting.
+	 * @param string $label Label.
+	 * @param array  $s     Settings.
+	 */
+	private static function confirm_box( $name, $label, array $s ) {
+		echo '<p class="mltsa-confirm"><label><input type="checkbox" name="' . esc_attr( $name ) . '" value="1"' . checked( ! empty( $s[ $name ] ), true, false ) . '> <strong>' . esc_html( $label ) . '</strong></label></p>';
 	}
 
 	/**

@@ -53,10 +53,11 @@ class ZipStream {
 	 */
 	public function __construct( callable $out, $time ) {
 		$this->out = $out;
-		$t         = getdate( (int) $time );
+		// UTC, never the server's timezone, so the same timestamp gives the same bytes anywhere.
+		$time      = (int) $time;
 		$this->dos = array(
-			( $t['hours'] << 11 ) | ( $t['minutes'] << 5 ) | (int) ( $t['seconds'] / 2 ),
-			( max( 0, $t['year'] - 1980 ) << 9 ) | ( $t['mon'] << 5 ) | $t['mday'],
+			( (int) gmdate( 'G', $time ) << 11 ) | ( (int) gmdate( 'i', $time ) << 5 ) | (int) ( (int) gmdate( 's', $time ) / 2 ),
+			( max( 0, (int) gmdate( 'Y', $time ) - 1980 ) << 9 ) | ( (int) gmdate( 'n', $time ) << 5 ) | (int) gmdate( 'j', $time ),
 		);
 	}
 

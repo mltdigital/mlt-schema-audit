@@ -9,6 +9,7 @@
 // phpcs:disable
 
 use MLT\SchemaAudit\Discovery;
+use MLT\SchemaAudit\Engine\Evaluator;
 use MLT\SchemaAudit\Engine\UrlPolicy;
 use MLT\SchemaAudit\Export\Csv;
 use MLT\SchemaAudit\Export\ZipStream;
@@ -216,6 +217,31 @@ mltsa_test(
 );
 
 mltsa_test(
+	'Review fix 6: a recheck keeps a stored permalink query; the request policy still applies',
+	static function () {
+		$policy = new UrlPolicy( 'https://www.firm.example/', false, static function () {
+			return array( '203.0.113.10' );
+		} );
+		$cands  = array();
+		foreach ( array( 'https://www.firm.example/?p=12#top', 'https://www.firm.example/?page_id=7', 'https://www.firm.example/?rest_route=/wp/v2/users', 'https://www.firm.example/about/' ) as $u ) {
+			$cands[] = array( 'url' => $u, 'source' => 'recheck', 'post_id' => 0, 'exclude' => '' );
+		}
+		$frozen  = Discovery::freeze( $cands, $policy, 2000 );
+		$pending = array();
+		$reasons = array();
+		foreach ( $frozen['urls'] as $u ) {
+			if ( 'pending' === $u['coverage'] ) {
+				$pending[] = $u['url'];
+			} else {
+				$reasons[] = $u['reason'];
+			}
+		}
+		check_same( array( 'https://www.firm.example/?p=12', 'https://www.firm.example/?page_id=7', 'https://www.firm.example/about/' ), $pending, 'Plain permalinks are rechecked as stored, not as the home page' );
+		check( 1 === count( $reasons ) && '' !== $reasons[0], 'A REST query is still refused on recheck' );
+	}
+);
+
+mltsa_test(
 	'AC scope: the URL cap records the rest as excluded, and a sitemap index lists child sitemaps',
 	static function () {
 		$policy = new UrlPolicy( 'https://www.firm.example/', false, static function () {
@@ -230,5 +256,154 @@ mltsa_test(
 		check_same( array( 'url_cap' => 2 ), $frozen['excluded_by_reason'], 'Two over the cap' );
 		$index = Discovery::parse_sitemap( '<sitemapindex><sitemap><loc>https://www.firm.example/page-sitemap.xml</loc></sitemap></sitemapindex>' );
 		check_same( array( 'https://www.firm.example/page-sitemap.xml' ), $index['sitemaps'], 'Index entries are sitemaps' );
+	}
+);
+
+mltsa_test(
+	'Review SEC-1: a formula hidden behind leading whitespace or control characters is neutralised',
+	static function () {
+		$hidden = array( ' =1+1', "\n=HYPERLINK(\"http://x\")", "\r\n+1", "  \t-2", "\x0B@SUM(A1)", "\x00=1", "\xC2\xA0=1", "\xE2\x80\x8B=1", "\xEF\xBB\xBF=1", ' ', "\n\t" );
+		foreach ( array_slice( $hidden, 0, 9 ) as $value ) {
+			check_same( "'" . $value, Csv::cell( $value ), 'Neutralised ' . json_encode( $value ) );
+		}
+		check_same( "'\t", Csv::cell( "\t" ), 'A lone tab is still prefixed (first byte rule unchanged)' );
+		foreach ( array( ' ', "\n", 'a =1', "line\n=1", ' text', '', 'x-y', "\xFF=1" ) as $safe ) {
+			check_same( $safe, Csv::cell( $safe ), 'Left alone ' . json_encode( $safe ) );
+		}
+		$doc = Csv::document( array( ' =h' ), array( array( "\n=cmd", 'ok' ) ) );
+		check( false !== strpos( $doc, "\"' =h\"" ), 'Header cells go through the same guard' );
+		check( false !== strpos( $doc, "\"'\n=cmd\"" ), 'Document rows go through the same guard' );
+	}
+);
+
+mltsa_test(
+	'Review SEC-4: ZIP bytes depend on the timestamp only, not the server timezone',
+	static function () {
+		$build = static function () {
+			$bytes = '';
+			$zip   = new ZipStream(
+				static function ( $chunk ) use ( &$bytes ) {
+					$bytes .= $chunk;
+				},
+				gmmktime( 23, 59, 58, 12, 31, 2026 )
+			);
+			$zip->add( 'a.txt', 'alpha' );
+			$zip->finish();
+			return $bytes;
+		};
+		$before = date_default_timezone_get();
+		date_default_timezone_set( 'UTC' );
+		$utc = $build();
+		date_default_timezone_set( 'Pacific/Auckland' );
+		$nz = $build();
+		date_default_timezone_set( 'America/Los_Angeles' );
+		$la = $build();
+		date_default_timezone_set( $before );
+		check_same( hash( 'sha256', $utc ), hash( 'sha256', $nz ), 'Same bytes under UTC and Auckland' );
+		check_same( hash( 'sha256', $utc ), hash( 'sha256', $la ), 'Same bytes under UTC and Los Angeles' );
+		// DOS time word at offset 10, date word at offset 12 of the first local header: 23:59:58 on 31 Dec 2026 in UTC.
+		$words = unpack( 'vtime/vdate', substr( $utc, 10, 4 ) );
+		check_same( ( 23 << 11 ) | ( 59 << 5 ) | 29, $words['time'], 'DOS time is the UTC time' );
+		check_same( ( 46 << 9 ) | ( 12 << 5 ) | 31, $words['date'], 'DOS date is the UTC date' );
+	}
+);
+
+mltsa_test(
+	'MySQL: every index in the schema fits utf8mb4 on MySQL 5.7, MariaDB, COMPACT InnoDB rows and MyISAM, and no TEXT column is indexed whole',
+	static function () {
+		$source = (string) file_get_contents( dirname( __DIR__, 2 ) . '/includes/Installer.php' );
+		check( preg_match_all( '/CREATE TABLE \{\$t\[\'(\w+)\'\]\} \((.*?)\n\) \$c;/s', $source, $tables, PREG_SET_ORDER ) >= 7, 'Seven tables parsed' );
+		$fixed = array(
+			'bigint'   => 8,
+			'int'      => 4,
+			'smallint' => 2,
+			'tinyint'  => 1,
+			'datetime' => 8,
+			'date'     => 3,
+		);
+		$keys  = 0;
+		foreach ( $tables as $table ) {
+			$columns = array();
+			foreach ( explode( "\n", $table[2] ) as $line ) {
+				if ( preg_match( '/^\s*(\w+)\s+(bigint|int|smallint|tinyint|datetime|date|varchar|char|text|longtext)(?:\((\d+)\))?/', $line, $m ) && ! in_array( strtoupper( $m[1] ), array( 'PRIMARY', 'KEY', 'UNIQUE' ), true ) ) {
+					$columns[ $m[1] ] = array( $m[2], isset( $m[3] ) ? (int) $m[3] : 0 );
+				}
+			}
+			preg_match_all( '/^\s*(?:PRIMARY KEY|UNIQUE KEY \w+|KEY \w+)\s+\((.*)\),?$/m', $table[2], $indexes, PREG_SET_ORDER );
+			foreach ( $indexes as $index ) {
+				++$keys;
+				$total = 0;
+				foreach ( array_map( 'trim', explode( ',', $index[1] ) ) as $part ) {
+					check( (bool) preg_match( '/^(\w+)(?:\((\d+)\))?$/', $part, $p ), 'Index part parsed: ' . $part );
+					check( isset( $columns[ $p[1] ] ), $table[1] . ': indexed column exists: ' . $p[1] );
+					list( $type, $length ) = $columns[ $p[1] ];
+					$prefix                = isset( $p[2] ) ? (int) $p[2] : 0;
+					if ( in_array( $type, array( 'text', 'longtext' ), true ) ) {
+						check( $prefix > 0, $table[1] . '.' . $p[1] . ': a TEXT column needs a key length' );
+					}
+					$bytes = isset( $fixed[ $type ] ) ? $fixed[ $type ] : 4 * ( $prefix > 0 ? $prefix : $length );
+					check( $bytes <= 767, $table[1] . '.' . $p[1] . ': ' . $bytes . ' bytes, over the 767-byte column limit of COMPACT rows (MySQL before 5.7.7, MariaDB before 10.2.2)' );
+					$total += $bytes;
+				}
+				check( $total <= 1000, $table[1] . ' (' . $index[1] . '): ' . $total . ' bytes, over the 1,000-byte MyISAM key limit' );
+			}
+		}
+		check( $keys >= 20, 'Indexes checked: ' . $keys );
+	}
+);
+
+mltsa_test(
+	'MySQL: a URL longer than the 2,048-character column is listed as excluded and stored cut to fit, never requested',
+	static function () {
+		$policy = new UrlPolicy( 'https://www.firm.example/', false, static function () {
+			return array( '203.0.113.10' );
+		} );
+		$long   = 'https://www.firm.example/' . str_repeat( 'a', 2100 ) . '/';
+		$exact  = 'https://www.firm.example/' . str_repeat( 'b', 2048 - 26 ) . '/';
+		$frozen = Discovery::freeze(
+			array(
+				array( 'url' => $long, 'source' => 'sitemap', 'post_id' => 0, 'exclude' => '' ),
+				array( 'url' => $exact, 'source' => 'sitemap', 'post_id' => 0, 'exclude' => '' ),
+			),
+			$policy,
+			2000
+		);
+		check_same( 2048, strlen( $exact ), 'Test URL of exactly 2,048 characters' );
+		check_same( array( 'url_too_long' => 1 ), $frozen['excluded_by_reason'], 'The long URL is excluded' );
+		check_same( 1, $frozen['included'], 'The 2,048-character URL is kept' );
+		check_same( 'excluded', $frozen['urls'][0]['coverage'], 'Excluded, so it is never requested' );
+		check_same( 2048, strlen( $frozen['urls'][0]['url'] ), 'Stored cut to the column size' );
+		check_same( sha1( Evaluator::url_key( $long ) ), $frozen['urls'][0]['url_key'], 'Its key is the full URL\'s' );
+	}
+);
+
+mltsa_test(
+	'First-run UX: self-fetch stall shows after three fetches in a row at the time limit while another page answered quickly',
+	static function () {
+		$ok   = array( 'outcome' => 'ok', 'duration_ms' => 400 );
+		$slow = array( 'outcome' => 'timeout', 'duration_ms' => 15000 );
+		$cut  = array( 'outcome' => 'deferred', 'duration_ms' => 14000 );
+		$s    = \MLT\SchemaAudit\Ops\SelfFetch::next( array(), 7, $ok, 15 );
+		$s    = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 7, $slow, 15 );
+		$s    = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 7, $cut, 15 );
+		check_same( false, $s['detected'], 'Two slow fetches are not enough' );
+		$s = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 7, $slow, 15 );
+		check_same( true, $s['detected'], 'Three in a row with a quick page' );
+		$s = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 7, $ok, 15 );
+		check_same( true, $s['detected'], 'Stays shown for the run' );
+		$s = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 8, $slow, 15 );
+		check_same( false, $s['detected'], 'A new run starts clean' );
+
+		$n = array();
+		foreach ( array( $slow, $slow, $slow, $slow ) as $r ) {
+			$n = \MLT\SchemaAudit\Ops\SelfFetch::next( $n, 9, $r, 15 );
+		}
+		check_same( false, $n['detected'], 'A site that never answers quickly is slow, not stalled' );
+
+		$q = \MLT\SchemaAudit\Ops\SelfFetch::next( array(), 10, $ok, 15 );
+		foreach ( array( $slow, array( 'outcome' => 'timeout', 'duration_ms' => 2000 ), $slow, $slow ) as $r ) {
+			$q = \MLT\SchemaAudit\Ops\SelfFetch::next( $q, 10, $r, 15 );
+		}
+		check_same( false, $q['detected'], 'A quick failure breaks the run of slow fetches' );
 	}
 );

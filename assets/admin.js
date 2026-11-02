@@ -10,6 +10,8 @@
 	}
 	var text = document.getElementById( 'mltsa-progress-text' );
 	var bar = document.getElementById( 'mltsa-bar-fill' );
+	var stall = document.getElementById( 'mltsa-stall' );
+	var stallText = document.getElementById( 'mltsa-stall-text' );
 	var failures = 0;
 
 	function step() {
@@ -28,7 +30,14 @@
 					var done = parseInt( s.done, 10 ) || 0;
 					text.textContent = done + ' of ' + ( parseInt( s.total, 10 ) || 0 ) + ' pages, phase: ' + String( s.phase || '' );
 					bar.style.width = Math.min( 100, Math.floor( ( 100 * done ) / total ) ) + '%';
+					if ( stall && s.stall ) {
+						stallText.textContent = String( s.stall );
+						stall.hidden = false;
+					}
 					window.setTimeout( step, 'locked' === s.note ? 5000 : 500 );
+				} else if ( 'schema_outdated' === s.state ) {
+					// The database upgrade has not completed: stop, say why.
+					text.textContent = String( s.message || 'Waiting for the database upgrade.' );
 				} else {
 					text.textContent = 'Finished. Reloading.';
 					window.location.reload();

@@ -16,6 +16,7 @@
 
 use MLT\SchemaAudit\Engine\Evaluator;
 use MLT\SchemaAudit\Engine\Extractor;
+use MLT\SchemaAudit\Engine\Rules;
 use MLT\SchemaAudit\Engine\SiteRules;
 
 /**
@@ -195,6 +196,122 @@ mltsa_test(
 );
 
 mltsa_test(
+	'Review reply: a broken own-host sameAs link is not reported as a broken image; a broken own-host logo still is',
+	static function () {
+		$site = 'https://www.firm-sameas.example';
+		$fx   = array(
+			'site'      => $site,
+			'pages'     => array(
+				array(
+					'path'   => '/',
+					'body'   => '<p>Firm</p>',
+					'blocks' => array(
+						array(
+							'@context' => 'https://schema.org',
+							'@type'    => 'LegalService',
+							'@id'      => $site . '/#org',
+							'name'     => 'Firm',
+							'logo'     => $site . '/wp-content/uploads/logo.png',
+							'sameAs'   => array( $site . '/about-us/', 'https://firm-sameas.example/team/' ),
+						),
+					),
+				),
+			),
+			'resources' => array(
+				$site . '/wp-content/uploads/logo.png' => 404,
+				$site . '/about-us/'                   => 404,
+				'https://firm-sameas.example/team/'    => 410,
+			),
+		);
+		$broken = array();
+		foreach ( run_fixture( $fx )['findings'] as $f ) {
+			if ( 'URL-004' === $f['rule_id'] ) {
+				$broken[] = $f['property'] . ' ' . $f['observed'];
+			}
+		}
+		check_same( array( 'logo ' . $site . '/wp-content/uploads/logo.png' ), $broken, 'Only the logo is a broken file' );
+		check_same( 3, Rules::get( 'URL-004' )['version'], 'URL-004 version bumped, so open sameAs issues are held as a rule change, not cleared as fixed' );
+	}
+);
+
+mltsa_test(
+	'Owner decision 2026-11-02: URL-008 reports a broken own-host sameAs profile link as a page; other hosts are never checked',
+	static function () {
+		$site = 'https://www.firm-links.example';
+		$fx   = array(
+			'site'      => $site,
+			'pages'     => array(
+				array(
+					'path'   => '/',
+					'body'   => '<p>Firm</p>',
+					'blocks' => array(
+						array(
+							'@context' => 'https://schema.org',
+							'@type'    => 'LegalService',
+							'@id'      => $site . '/#org',
+							'name'     => 'Firm',
+							'logo'     => $site . '/wp-content/uploads/logo.png',
+							'sameAs'   => array( 'https://social.example/firm', $site . '/about-us/' ),
+							'founder'  => array(
+								'@type'  => 'Person',
+								'name'   => 'Person A',
+								'sameAs' => array( 'https://firm-links.example/team/person-a/', $site . '/team/person-b/' ),
+							),
+						),
+					),
+				),
+			),
+			'resources' => array(
+				$site . '/wp-content/uploads/logo.png'      => 404,
+				$site . '/about-us/'                        => 200,
+				'https://firm-links.example/team/person-a/' => 410,
+				$site . '/team/person-b/'                   => 404,
+				'https://social.example/firm'               => 404,
+			),
+		);
+		$by_rule = array();
+		foreach ( run_fixture( $fx )['findings'] as $f ) {
+			if ( in_array( $f['rule_id'], array( 'URL-004', 'URL-008' ), true ) ) {
+				$by_rule[ $f['rule_id'] ][] = $f['property'] . ' ' . $f['observed'] . ' ' . $f['comparison'];
+			}
+		}
+		check_same( array( 'logo ' . $site . '/wp-content/uploads/logo.png HTTP 404' ), isset( $by_rule['URL-004'] ) ? $by_rule['URL-004'] : array(), 'URL-004: the logo only' );
+		$links = isset( $by_rule['URL-008'] ) ? $by_rule['URL-008'] : array();
+		sort( $links );
+		check_same( array( 'sameAs https://firm-links.example/team/person-a/ HTTP 410', 'sameAs ' . $site . '/team/person-b/ HTTP 404' ), $links, 'URL-008: both broken own-host profile links (www and bare), not the live one' );
+
+		$facts = array();
+		foreach ( $fx['pages'] as $i => $page ) {
+			$extraction      = ( new Extractor() )->extract( fixture_html( $page ) );
+			$facts[ $i + 1 ] = ( new Evaluator(
+				array(
+					'page_url'    => $site . '/',
+					'own_hosts'   => array( 'www.firm-links.example', 'firm-links.example' ),
+					'home_scheme' => 'https',
+				)
+			) )->evaluate( $extraction )['site'];
+		}
+		$listed = SiteRules::resources( $facts );
+		check( ! isset( $listed['https://social.example/firm'] ), 'The other host is never queued for a request' );
+		check_same( 4, count( $listed ), 'Logo and three own-host links share the one resource budget' );
+		check( SiteRules::is_file_check( $listed[ $site . '/wp-content/uploads/logo.png' ] ), 'The logo is requested as a file' );
+		check( ! SiteRules::is_file_check( $listed[ $site . '/team/person-b/' ] ), 'A profile link is requested as a page (normal page policy)' );
+		check_same( array( 'unchecked' ), array_values( array_unique( SiteRules::resource_outcomes( $facts, array() ) ) ), 'An unchecked profile link holds its issue like an unchecked image' );
+
+		$url004 = Rules::get( 'URL-004' );
+		$url008 = Rules::get( 'URL-008' );
+		$rank   = array(
+			'info'   => 0,
+			'low'    => 1,
+			'medium' => 2,
+			'high'   => 3,
+		);
+		check( $rank[ $url008['severity'] ] <= $rank[ $url004['severity'] ], 'URL-008 severity is no higher than URL-004' );
+		check_same( '2026.11.2', Rules::RULESET_VERSION, 'Rule set version bumped for the new rule' );
+	}
+);
+
+mltsa_test(
 	'HIST fixtures hold no client names, real hosts or non-fictional phone numbers',
 	static function () {
 		require_once dirname( __DIR__ ) . '/support/client-names.php';
@@ -206,7 +323,7 @@ mltsa_test(
 			foreach ( $numbers[0] as $number ) {
 				$digits = preg_replace( '/\D/', '', $number );
 				$digits = preg_replace( '/^44/', '0', $digits );
-				check( 0 === strpos( $digits, '01632' ) || 0 === strpos( $digits, '0808157' ), basename( $file ) . " has a non-fictional number {$number}" );
+				check( 0 === strpos( $digits, '01632960' ) || 0 === strpos( $digits, '0808157' ), basename( $file ) . " has a number outside the Ofcom drama ranges {$number}" );
 			}
 		}
 	}

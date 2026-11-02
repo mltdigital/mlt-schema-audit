@@ -35,6 +35,12 @@ class Discovery {
 	const MAX_SITEMAP_URLS = 2000;
 
 	/**
+	 * Longest URL listed (the run_urls.url column, varchar(2048)). The
+	 * sitemap protocol limits URLs to fewer than 2,048 characters.
+	 */
+	const MAX_URL_LENGTH = 2048;
+
+	/**
 	 * Gather candidates from WordPress.
 	 *
 	 * @param array $settings Settings.
@@ -91,61 +97,126 @@ class Discovery {
 	}
 
 	/**
-	 * Gather candidates from same-host sitemaps, with caps.
+	 * Gather candidates from same-host sitemaps, with caps, in one call.
 	 *
 	 * @param Fetcher   $fetcher Fetcher (same policy as page fetches).
 	 * @param UrlPolicy $policy  Policy.
 	 * @return array List of { url, source, post_id, exclude }.
 	 */
 	public static function from_sitemaps( Fetcher $fetcher, UrlPolicy $policy ) {
-		$base  = $policy->home_scheme() . '://' . $policy->home_host();
-		$queue = array( $base . '/wp-sitemap.xml', $base . '/sitemap_index.xml', $base . '/sitemap.xml' );
-		$seen  = array();
-		$out   = array();
-		$read  = 0;
-		$found = 0;
-		while ( ! empty( $queue ) && $read < self::MAX_SITEMAPS && $found < self::MAX_SITEMAP_URLS ) {
-			$url = array_shift( $queue );
-			if ( isset( $seen[ $url ] ) ) {
-				continue;
+		$state = self::sitemap_state( $policy );
+		while ( ! $state['done'] ) {
+			$state = self::sitemap_step( $fetcher, $policy, $state );
+		}
+		return $state['out'];
+	}
+
+	/**
+	 * Starting state for stepped sitemap discovery.
+	 *
+	 * @param UrlPolicy $policy Policy.
+	 * @return array { queue, seen, out, read, not_read, deferrals, fetched, deferred, done }
+	 */
+	public static function sitemap_state( UrlPolicy $policy ) {
+		$base = $policy->home_scheme() . '://' . $policy->home_host();
+		return array(
+			'queue'     => array( $base . '/wp-sitemap.xml', $base . '/sitemap_index.xml', $base . '/sitemap.xml' ),
+			'seen'      => array(),
+			'out'       => array(),
+			'read'      => 0,
+			'not_read'  => 0,
+			'deferrals' => 0,
+			'fetched'   => 0,
+			'deferred'  => false,
+			'done'      => false,
+		);
+	}
+
+	/**
+	 * Read at most one sitemap, so a worker slice never holds more than one
+	 * sitemap request and a killed process loses at most that one (finding 4).
+	 * A fetch the deadline deferred stays at the front of the queue, with the
+	 * redirect hop or retry it reached kept in 'resume', so the next step
+	 * continues from there (branch review S1). A deferral counts only when
+	 * the step had the whole slice ($fair) and still could not make a request
+	 * (not a retry's wait); on the third the sitemap counts as read and
+	 * failed. A sitemap that could not be read (other than not found or gone)
+	 * is counted in not_read, so the audit screen shows it (branch review R1).
+	 *
+	 * @param Fetcher   $fetcher  Fetcher.
+	 * @param UrlPolicy $policy   Policy.
+	 * @param array     $state    State from sitemap_state() or a previous step.
+	 * @param float     $deadline Unix time to finish by; 0 for none.
+	 * @param bool      $fair     Whether this step has the whole slice.
+	 * @return array New state.
+	 */
+	public static function sitemap_step( Fetcher $fetcher, UrlPolicy $policy, array $state, $deadline = 0.0, $fair = true ) {
+		$state['deferred'] = false;
+		if ( empty( $state['queue'] ) || $state['read'] >= self::MAX_SITEMAPS || count( $state['out'] ) >= self::MAX_SITEMAP_URLS ) {
+			$state['done'] = true;
+			return $state;
+		}
+		$url = (string) $state['queue'][0];
+		if ( isset( $state['seen'][ $url ] ) ) {
+			array_shift( $state['queue'] );
+			return $state;
+		}
+		$resume = isset( $state['resume'] ) && is_array( $state['resume'] ) ? $state['resume'] : array();
+		$result = $fetcher->fetch( $url, 'GET', false, $deadline, $resume );
+		if ( $result['attempts'] > 0 ) {
+			++$state['fetched'];
+		}
+		if ( 'deferred' === $result['outcome'] ) {
+			$state['resume'] = $result['resume'];
+			if ( Fetcher::deferral_counts( $result, $fair ) ) {
+				++$state['deferrals'];
 			}
-			$seen[ $url ] = true;
-			$result       = $fetcher->fetch( $url );
-			++$read;
-			if ( 'ok' !== $result['outcome'] ) {
-				continue;
-			}
-			$parsed = self::parse_sitemap( $result['body'] );
-			foreach ( $parsed['sitemaps'] as $child ) {
-				if ( $policy->check_url( $child )['ok'] ) {
-					$queue[] = $child;
-				}
-			}
-			foreach ( $parsed['urls'] as $loc ) {
-				if ( count( $out ) >= self::MAX_SITEMAP_URLS ) {
-					break;
-				}
-				$out[] = array(
-					'url'     => $loc,
-					'source'  => 'sitemap',
-					'post_id' => 0,
-					'exclude' => '',
-				);
-			}
-			$found = count( $out );
-			if ( ! empty( $parsed['urls'] ) || ! empty( $parsed['sitemaps'] ) ) {
-				// Found a working index; do not also read the fallbacks.
-				$queue = array_values(
-					array_filter(
-						$queue,
-						static function ( $q ) use ( $base ) {
-							return ! in_array( $q, array( $base . '/sitemap_index.xml', $base . '/sitemap.xml' ), true );
-						}
-					)
-				);
+			if ( $state['deferrals'] < 3 ) {
+				$state['deferred'] = true;
+				return $state;
 			}
 		}
-		return $out;
+		unset( $state['resume'] );
+		array_shift( $state['queue'] );
+		$state['seen'][ $url ] = true;
+		$state['deferrals']    = 0;
+		++$state['read'];
+		if ( 'ok' !== $result['outcome'] ) {
+			if ( ! in_array( $result['outcome'], array( 'not_found', 'gone' ), true ) ) {
+				$state['not_read'] = ( isset( $state['not_read'] ) ? (int) $state['not_read'] : 0 ) + 1;
+			}
+			return $state;
+		}
+		$base   = $policy->home_scheme() . '://' . $policy->home_host();
+		$parsed = self::parse_sitemap( $result['body'] );
+		foreach ( $parsed['sitemaps'] as $child ) {
+			if ( $policy->check_url( $child )['ok'] ) {
+				$state['queue'][] = $child;
+			}
+		}
+		foreach ( $parsed['urls'] as $loc ) {
+			if ( count( $state['out'] ) >= self::MAX_SITEMAP_URLS ) {
+				break;
+			}
+			$state['out'][] = array(
+				'url'     => $loc,
+				'source'  => 'sitemap',
+				'post_id' => 0,
+				'exclude' => '',
+			);
+		}
+		if ( ! empty( $parsed['urls'] ) || ! empty( $parsed['sitemaps'] ) ) {
+			// Found a working index; do not also read the fallbacks.
+			$state['queue'] = array_values(
+				array_filter(
+					$state['queue'],
+					static function ( $q ) use ( $base ) {
+						return ! in_array( $q, array( $base . '/sitemap_index.xml', $base . '/sitemap.xml' ), true );
+					}
+				)
+			);
+		}
+		return $state;
 	}
 
 	/**
@@ -196,7 +267,9 @@ class Discovery {
 			// Permalinks WordPress generated itself keep their query string, so
 			// plain permalinks (?p=12) work; the request policy still refuses
 			// action, nonce and REST queries. Other sources lose it (F6).
-			$from_wp = 'home' === $c['source'] || 0 === strpos( (string) $c['source'], 'post:' );
+			// Recheck URLs come from the register, so they were frozen once
+			// already and any query left on them is one kept here before.
+			$from_wp = in_array( (string) $c['source'], array( 'home', 'recheck' ), true ) || 0 === strpos( (string) $c['source'], 'post:' );
 			$url     = $from_wp ? (string) preg_replace( '/#.*$/s', '', trim( (string) $c['url'] ) ) : self::clean( (string) $c['url'] );
 			$key     = Evaluator::url_key( $url );
 			if ( '' === $url || isset( $keys[ $key ] ) ) {
@@ -204,6 +277,11 @@ class Discovery {
 			}
 			$keys[ $key ] = true;
 			$reason       = (string) $c['exclude'];
+			// The URL column holds 2,048 characters. MySQL would cut a longer
+			// URL to fit, and the audit would then request a different page.
+			if ( '' === $reason && strlen( $url ) > self::MAX_URL_LENGTH ) {
+				$reason = 'url_too_long';
+			}
 			if ( '' === $reason ) {
 				$check  = $policy->check_url( $url );
 				$reason = $check['ok'] ? '' : $check['reason'];
@@ -217,7 +295,7 @@ class Discovery {
 				$counts[ $reason ] = isset( $counts[ $reason ] ) ? $counts[ $reason ] + 1 : 1;
 			}
 			$list[] = array(
-				'url'      => $url,
+				'url'      => substr( $url, 0, self::MAX_URL_LENGTH ),
 				'url_key'  => sha1( $key ),
 				'source'   => (string) $c['source'],
 				'post_id'  => (int) $c['post_id'],

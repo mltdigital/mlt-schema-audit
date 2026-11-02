@@ -7,6 +7,8 @@
 
 // phpcs:disable
 
+use MLT\SchemaAudit\Discovery;
+use MLT\SchemaAudit\Engine\Comparator;
 use MLT\SchemaAudit\Engine\Fetcher;
 use MLT\SchemaAudit\Engine\UrlPolicy;
 
@@ -195,5 +197,247 @@ mltsa_test(
 		check( ! $policy->check_url( 'ftp://www.example-legal.co.uk/' )['ok'], 'ftp refused' );
 		check( ! $policy->check_url( 'file:///etc/passwd' )['ok'], 'file refused' );
 		check( ! $policy->check_url( 'gopher://www.example-legal.co.uk/' )['ok'], 'gopher refused' );
+	}
+);
+
+mltsa_test(
+	'F1 review 2026-10-30: IPv6 spellings of private addresses are judged by their bytes',
+	static function () {
+		$cases = array(
+			'::ffff:7f00:1'           => 'loopback',
+			'::ffff:a00:1'            => 'private',
+			'::ffff:a9fe:a9fe'        => 'metadata',
+			'0:0:0:0:0:0:0:1'         => 'loopback',
+			'0000::0001'              => 'loopback',
+			'0:0:0:0:0:ffff:7f00:1'   => 'loopback',
+			'64:ff9b::7f00:1'         => 'loopback',
+			'2002:c0a8:0101::1'       => 'private',
+			'::7f00:1'                => 'reserved',
+			'::'                      => 'reserved',
+			'fd00:ec2:0:0:0:0:0:254'  => 'metadata',
+			'fec0::1'                 => 'private',
+			'2001:0:4136:e378::1'     => 'reserved',
+			'2a00:1450:4009:81f::200e' => 'public',
+			'::ffff:203.0.114.10'     => 'public',
+		);
+		foreach ( $cases as $ip => $class ) {
+			check_same( $class, UrlPolicy::classify_ip( $ip ), 'classify ' . $ip );
+		}
+		$policy = mltsa_policy( false, array( 'www.example-legal.co.uk' => array( '::ffff:7f00:1' ) ) );
+		$check  = $policy->check_host_addresses( 'www.example-legal.co.uk' );
+		check_same( false, $check['ok'], 'mapped loopback refused without the private-self allowance' );
+	}
+);
+
+mltsa_test(
+	'F1 review 2026-10-30: dot segments, encoded dots and doubled slashes cannot reach denied paths',
+	static function () {
+		$policy = mltsa_policy();
+		foreach ( array( '/public/../wp-admin/', '/./wp-admin/', '/page/../wp-login.php', '/%2e%2e/wp-admin/', '/a/%2E%2E/xmlrpc.php', '//wp-admin/', '/x/..%2fwp-json/', '/a%5c..%5cwp-admin/', '/%252e%252e/wp-admin/' ) as $path ) {
+			$check = $policy->check_url( 'https://www.example-legal.co.uk' . $path );
+			check_same( 'denied_path', $check['reason'], 'denied ' . $path );
+		}
+		check_same( true, $policy->check_url( 'https://www.example-legal.co.uk/services/../about/' )['ok'], 'harmless traversal still allowed' );
+		check_same( 'https://www.example-legal.co.uk/about/', $policy->normalise( 'https://www.example-legal.co.uk/services/../about/' ), 'normalise removes dot segments' );
+		check_same( '/a/', UrlPolicy::remove_dot_segments( '/a/b/..' ), 'trailing dot segment leaves a directory' );
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/start/'] = array( 'status' => 302, 'headers' => array( 'location' => 'https://www.example-legal.co.uk/x/../wp-admin/' ) );
+		$result = mltsa_fetcher( $client )->fetch( 'https://www.example-legal.co.uk/start/' );
+		check_same( 'blocked', $result['outcome'], 'absolute redirect with traversal refused' );
+		check_same( 1, count( $client->requests ), 'no request made to the traversal target' );
+	}
+);
+
+mltsa_test(
+	'F6 review 2026-10-30: image checks may request static files under wp-content, never scripts, and pages never',
+	static function () {
+		$policy = mltsa_policy();
+		$base   = 'https://www.example-legal.co.uk';
+		foreach ( array( '/wp-content/uploads/2026/03/logo.png', '/wp-content/uploads/team.JPG', '/wp-content/themes/firm/img/logo.svg', '/wp-includes/images/w-logo-blue.png', '/wp-content/uploads/brochure.pdf', '/wp-content/uploads/logo.webp?ver=2' ) as $path ) {
+			check_same( true, $policy->check_url( $base . $path, true )['ok'], 'resource allowed ' . $path );
+			check_same( 'denied_path', $policy->check_url( $base . $path )['reason'], 'page fetch still refused ' . $path );
+		}
+		foreach ( array( '/wp-content/plugins/x/run.php', '/wp-content/plugins/x/run.php/a.png', '/wp-content/uploads/a.php.png', '/wp-content/uploads/a.phtml', '/wp-content/uploads/a.php%00.png', '/wp-content/uploads/', '/wp-content/uploads/a.png/..', '/wp-content/uploads/../plugins/x/run.php', '/wp-content/uploads/a%2ephp%2fb.png', '/wp-includes/ms-files.php', '/wp-admin/images/logo.png', '/wp-json/wp/v2/media.png' ) as $path ) {
+			check_same( 'denied_path', $policy->check_url( $base . $path, true )['reason'], 'resource refused ' . $path );
+		}
+		check_same( 'denied_query', $policy->check_url( $base . '/wp-content/uploads/a.png?action=delete', true )['reason'], 'side-effect query refused on a resource' );
+		check_same( 'off_site_host', $policy->check_url( 'https://cdn.example.net/wp-content/uploads/a.png', true )['reason'], 'other hosts still refused' );
+
+		$client = new Scripted_Client();
+		$client->responses[ $base . '/wp-content/uploads/logo.png' ] = array( 'status' => 200 );
+		$result = mltsa_fetcher( $client )->fetch( $base . '/wp-content/uploads/logo.png', 'HEAD', true );
+		check_same( 'ok', $result['outcome'], 'upload checked' );
+
+		$client = new Scripted_Client();
+		$client->responses[ $base . '/wp-content/uploads/old.png' ] = array( 'status' => 301, 'headers' => array( 'location' => $base . '/wp-content/plugins/x/run.php' ) );
+		$result = mltsa_fetcher( $client )->fetch( $base . '/wp-content/uploads/old.png', 'HEAD', true );
+		check_same( 'blocked', $result['outcome'], 'redirect from an image to a script refused' );
+		check_same( 1, count( $client->requests ), 'no request made to the script' );
+	}
+);
+
+mltsa_test(
+	'Branch review R1: a request starts only with the full timeout left, is never cut short, and a timeout is the site\'s',
+	static function () {
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/slow/'] = array( 'status' => 0, 'error_code' => 'timeout' );
+		$fetcher = mltsa_fetcher( $client );
+
+		$short = $fetcher->fetch( 'https://www.example-legal.co.uk/slow/', 'GET', false, microtime( true ) + 8 );
+		check_same( 'deferred', $short['outcome'], 'less time left than the timeout: deferred' );
+		check_same( 'budget_spent', $short['reason'], 'reason' );
+		check_same( 0, $short['attempts'], 'no attempt counted' );
+		check_same( 0, count( $client->requests ), 'no request made with less than the full timeout left' );
+
+		$full = $fetcher->fetch( 'https://www.example-legal.co.uk/slow/', 'GET', false, microtime( true ) + 17 );
+		check_same( 15, $client->requests[0]['args']['timeout'], 'the full setting is sent' );
+		check_same( 'timeout', $full['outcome'], 'a timeout after the full setting is a timeout' );
+		check_same( 1, $full['attempts'], 'one request made' );
+
+		$client->responses['https://www.example-legal.co.uk/ten-seconds/'] = array( 'body' => '<html></html>' );
+		for ( $i = 0; $i < 3; $i++ ) {
+			$fetcher->fetch( 'https://www.example-legal.co.uk/ten-seconds/', 'GET', false, microtime( true ) + 8 );
+		}
+		$read = $fetcher->fetch( 'https://www.example-legal.co.uk/ten-seconds/', 'GET', false, microtime( true ) + 17 );
+		check_same( 'ok', $read['outcome'], 'a page answering within the timeout is read once a slice has room' );
+		foreach ( $client->requests as $request ) {
+			check_same( 15, $request['args']['timeout'], 'no request is ever sent a shortened timeout' );
+		}
+	}
+);
+
+mltsa_test(
+	'F4 review 2026-10-30: a retry that would run past the deadline is deferred instead of slept for',
+	static function () {
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/busy/'] = array( 'status' => 503 );
+		$sleeps  = array();
+		$fetcher = new Fetcher( mltsa_policy(), $client, array( 'timeout' => 3 ), static function ( $s ) use ( &$sleeps ) { $sleeps[] = $s; } );
+		$result  = $fetcher->fetch( 'https://www.example-legal.co.uk/busy/', 'GET', false, microtime( true ) + 6.5 );
+		check_same( array( 2 ), $sleeps, 'first backoff and a full timeout fit, second does not' );
+		check_same( 2, $result['attempts'], 'two requests' );
+		check_same( 'deferred', $result['outcome'], 'deferred' );
+		check_same( 'budget_retry', $result['reason'], 'reason' );
+	}
+);
+
+mltsa_test(
+	'Branch review R1: sitemap discovery reads a slow sitemap, counts only fair deferrals, and records sitemaps it could not read',
+	static function () {
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/wp-sitemap.xml'] = array( 'body' => '<sitemapindex><sitemap><loc>https://www.example-legal.co.uk/wp-sitemap-posts-page-1.xml</loc></sitemap><sitemap><loc>https://www.example-legal.co.uk/wp-sitemap-posts-post-1.xml</loc></sitemap></sitemapindex>', 'headers' => array( 'content-type' => 'application/xml' ) );
+		$client->responses['https://www.example-legal.co.uk/wp-sitemap-posts-page-1.xml'] = array( 'status' => 503 );
+		$client->responses['https://www.example-legal.co.uk/wp-sitemap-posts-post-1.xml'] = array( 'body' => '<urlset><url><loc>https://www.example-legal.co.uk/news/a/</loc></url></urlset>', 'headers' => array( 'content-type' => 'application/xml' ) );
+		$policy  = mltsa_policy();
+		$fetcher = new Fetcher( $policy, $client, array( 'timeout' => 3 ), static function () {} );
+		$state   = Discovery::sitemap_state( $policy );
+
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 100 );
+		check_same( 1, count( $client->requests ), 'one request for the index' );
+		check_same( 2, count( $state['queue'] ), 'children queued, fallbacks dropped' );
+
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 2, false );
+		check( $state['deferred'], 'no room for the full timeout: deferred' );
+		check_same( 1, count( $client->requests ), 'no request made' );
+		check_same( 0, $state['deferrals'], 'a step without the whole slice does not count' );
+
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 4, true );
+		check( $state['deferred'], 'retry did not fit: deferred' );
+		check_same( 2, count( $client->requests ), 'one request made' );
+		check_same( 0, $state['deferrals'], 'a deferral after a request does not count (branch review S1)' );
+		check( ! empty( $state['resume'] ), 'the retry it reached is kept' );
+
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 100, true );
+		check( ! $state['deferred'], 'the next slice continues the retries to the end' );
+		check_same( 4, count( $client->requests ), 'from the retry reached, not from the start' );
+		check_same( 2, $state['read'], 'a sitemap still refusing after its retries counts as read' );
+		check_same( 1, $state['not_read'], 'and as not read' );
+		check_same( array( 'https://www.example-legal.co.uk/wp-sitemap-posts-post-1.xml' ), $state['queue'], 'moved on to the next sitemap' );
+
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 100 );
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 100 );
+		check( $state['done'], 'done once the queue is empty' );
+		check_same( array( 'https://www.example-legal.co.uk/news/a/' ), array_column( $state['out'], 'url' ), 'URLs from the readable sitemap' );
+
+		$client->responses['https://www.example-legal.co.uk/wp-sitemap-posts-page-1.xml'] = array( 'body' => '<urlset><url><loc>https://www.example-legal.co.uk/slow-a/</loc></url></urlset>', 'headers' => array( 'content-type' => 'application/xml' ) );
+		$slow = new Fetcher( $policy, $client, array( 'timeout' => 15 ), static function () {} );
+		$fresh = Discovery::sitemap_state( $policy );
+		for ( $i = 0; $i < 6; $i++ ) {
+			$fresh = Discovery::sitemap_step( $slow, $policy, $fresh, microtime( true ) + 8, false );
+		}
+		check_same( 0, $fresh['read'], 'a step without the whole slice never gives a sitemap up' );
+		while ( ! $fresh['done'] ) {
+			$fresh = Discovery::sitemap_step( $slow, $policy, $fresh, microtime( true ) + 17 );
+		}
+		check( in_array( 'https://www.example-legal.co.uk/slow-a/', array_column( $fresh['out'], 'url' ), true ), 'read once a slice has room for the full timeout' );
+		check_same( 0, $fresh['not_read'], 'nothing left unread' );
+
+		$client->requests = array();
+		check_same( array( 'https://www.example-legal.co.uk/slow-a/', 'https://www.example-legal.co.uk/news/a/' ), array_column( Discovery::from_sitemaps( $fetcher, $policy ), 'url' ), 'one-call discovery unchanged without a deadline' );
+	}
+);
+
+mltsa_test(
+	'Branch review R3: a HEAD answer for a file over the size cap shows the file exists; the cap applies to GET bodies',
+	static function () {
+		$url    = 'https://www.example-legal.co.uk/wp-content/uploads/2026/brochure.pdf';
+		$client = new Scripted_Client();
+		$client->responses[ $url ] = array( 'status' => 200, 'headers' => array( 'content-type' => 'application/pdf', 'content-length' => '12582912' ), 'body' => '', 'truncated' => true );
+		$head = mltsa_fetcher( $client )->fetch( $url, 'HEAD', true );
+		check_same( 'ok', $head['outcome'], 'HEAD 200 on a 12 MB file' );
+		check_same( 200, $head['status'], 'status kept' );
+		check_same( 'read', Comparator::evidence_state( array( 'firm.example', 'resource:' . $url ), array( 'firm.example' => 'ok' ), array( $url => $head['outcome'] ) ), 'URL-004 evidence settles' );
+		$client->responses[ $url ]['body'] = str_repeat( 'a', 10 );
+		$get = mltsa_fetcher( $client )->fetch( $url, 'GET', true );
+		check_same( 'too_large', $get['outcome'], 'A GET body over the cap is still too large' );
+		$client->responses[ $url ]['status'] = 404;
+		check_same( 'not_found', mltsa_fetcher( $client )->fetch( $url, 'HEAD', true )['outcome'], 'A missing file is still not found' );
+	}
+);
+
+mltsa_test(
+	'Branch review S1: a redirect hop or retry that does not fit the slice continues in the next one and is read',
+	static function () {
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/old'] = static function () {
+			usleep( 1200000 );
+			return array( 'status' => 301, 'headers' => array( 'location' => 'https://www.example-legal.co.uk/new/' ) );
+		};
+		$client->responses['https://www.example-legal.co.uk/new/'] = array( 'body' => '<html></html>' );
+		$fetcher = new Fetcher( mltsa_policy(), $client, array( 'timeout' => 3 ), static function () {} );
+
+		$first = $fetcher->fetch( 'https://www.example-legal.co.uk/old', 'GET', false, microtime( true ) + 4 );
+		$client->responses['https://www.example-legal.co.uk/old'] = array( 'status' => 500 );
+		check_same( 'deferred', $first['outcome'], 'the second hop does not fit: deferred' );
+		check_same( 1, $first['attempts'], 'one request made' );
+		check( ! Fetcher::deferral_counts( $first, true ), 'a deferral after a request does not count' );
+
+		$second = $fetcher->fetch( 'https://www.example-legal.co.uk/old', 'GET', false, microtime( true ) + 4, $first['resume'] );
+		check_same( 'ok', $second['outcome'], 'continued at the second hop and read' );
+		check_same( 'https://www.example-legal.co.uk/new/', $second['final_url'], 'final URL' );
+		check_same( 2, count( $client->requests ), 'the first hop is not requested again' );
+
+		$other = $fetcher->fetch( 'https://www.example-legal.co.uk/elsewhere/', 'GET', false, microtime( true ) + 4, $first['resume'] );
+		check_same( 'https://www.example-legal.co.uk/elsewhere/', $client->requests[2]['url'], 'resume state for another URL is ignored' );
+
+		$client->responses['https://www.example-legal.co.uk/busy/'] = array( 'status' => 503 );
+		$sleeps = array();
+		$retry  = new Fetcher( mltsa_policy(), $client, array( 'timeout' => 3 ), static function ( $s ) use ( &$sleeps ) { $sleeps[] = $s; } );
+		$busy   = $retry->fetch( 'https://www.example-legal.co.uk/busy/', 'GET', false, microtime( true ) + 4 );
+		check_same( 'budget_retry', $busy['reason'], 'the retry and its wait do not fit' );
+		$busy = $retry->fetch( 'https://www.example-legal.co.uk/busy/', 'GET', false, microtime( true ) + 100, $busy['resume'] );
+		check_same( 'http_error', $busy['outcome'], 'a page still refusing after its retries is recorded as refused, not as out of time' );
+		check_same( 503, $busy['status'], 'with its status' );
+		check_same( 2, $busy['attempts'], 'the two remaining tries, this call' );
+	}
+);
+
+mltsa_test(
+	'Branch review S1: only a whole slice with no request and no retry wait counts toward giving a URL up',
+	static function () {
+		check( Fetcher::deferral_counts( array( 'attempts' => 0, 'reason' => 'budget_spent' ), true ), 'whole slice, no request: counts' );
+		check( ! Fetcher::deferral_counts( array( 'attempts' => 0, 'reason' => 'budget_spent' ), false ), 'not the whole slice: does not count' );
+		check( ! Fetcher::deferral_counts( array( 'attempts' => 1, 'reason' => 'budget_spent' ), true ), 'a request moved it on: does not count' );
+		check( ! Fetcher::deferral_counts( array( 'attempts' => 0, 'reason' => 'budget_retry' ), true ), 'waiting for a retry: does not count' );
 	}
 );

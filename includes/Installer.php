@@ -27,7 +27,7 @@ class Installer {
 	/**
 	 * Every cron hook the plugin owns.
 	 */
-	const HOOKS = array( 'mltsa_monthly_start', 'mltsa_worker', 'mltsa_outbox', 'mltsa_retention' );
+	const HOOKS = array( 'mltsa_monthly_start', 'mltsa_worker', 'mltsa_outbox', 'mltsa_retention', 'mltsa_watchdog' );
 
 	/**
 	 * Table suffixes.
@@ -35,9 +35,28 @@ class Installer {
 	const TABLES = array( 'runs', 'run_urls', 'blocks', 'occurrences', 'issues', 'events', 'outbox' );
 
 	/**
-	 * Activate.
+	 * Columns added by database upgrades, per table, checked before the new
+	 * version is recorded. Every table is listed so a missing one counts too.
+	 * Version 2 added issues.evidence. An added column is nullable or has a
+	 * default: some databases cannot add a NOT NULL column without one, and
+	 * MySQL before 8.0.13 allows no default on a text column.
 	 */
-	public static function activate() {
+	const UPGRADE_COLUMNS = array(
+		'runs'        => array( 'id' ),
+		'run_urls'    => array( 'id' ),
+		'blocks'      => array( 'id' ),
+		'occurrences' => array( 'id' ),
+		'issues'      => array( 'id', 'evidence' ),
+		'events'      => array( 'id' ),
+		'outbox'      => array( 'id' ),
+	);
+
+	/**
+	 * Activate.
+	 *
+	 * @param bool $network_wide Network activation on multisite.
+	 */
+	public static function activate( $network_wide = false ) {
 		self::create_tables();
 		$role = get_role( 'administrator' );
 		if ( $role ) {
@@ -49,6 +68,11 @@ class Installer {
 			add_option( Settings::OPTION, Settings::defaults(), '', 'no' );
 		}
 		Ops\Scheduler::reschedule_after_activation();
+		// Open the Settings screen once, after a first single activation
+		// only: not on bulk or network activation, and not on reactivation.
+		if ( ! $network_wide && ! isset( $_GET['activate-multi'] ) && false === get_option( 'mltsa_setup_seen', false ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only flag set by core's bulk activation.
+			add_option( 'mltsa_activation_redirect', 1, '', 'no' );
+		}
 	}
 
 	/**
@@ -86,6 +110,11 @@ class Installer {
 		delete_option( 'mltsa_last_tick' );
 		delete_option( 'mltsa_health' );
 		delete_option( 'mltsa_mail_blocked' );
+		delete_option( 'mltsa_discovery_state' );
+		delete_option( 'mltsa_self_fetch' );
+		delete_option( 'mltsa_activation_redirect' );
+		delete_option( 'mltsa_setup_seen' );
+		delete_transient( 'mltsa_upgrade_retry' );
 
 		if ( $remove ) {
 			foreach ( self::TABLES as $table ) {
@@ -249,6 +278,7 @@ class Installer {
   change_reason varchar(20) NOT NULL DEFAULT '',
   observed_hash char(40) NOT NULL DEFAULT '',
   latest_occurrence_id bigint(20) unsigned NOT NULL DEFAULT 0,
+  evidence longtext,
   work_status varchar(30) NOT NULL DEFAULT 'open',
   owner_user_id bigint(20) unsigned NOT NULL DEFAULT 0,
   due_date date DEFAULT NULL,
@@ -296,11 +326,54 @@ class Installer {
   updated_utc datetime DEFAULT NULL,
   submitted_utc datetime DEFAULT NULL,
   PRIMARY KEY  (id),
-  UNIQUE KEY one_per_recipient (run_id, notification_type, recipient),
+  UNIQUE KEY one_per_recipient (run_id, notification_type, recipient(191)),
   KEY state (state)
 ) $c;";
 
 		dbDelta( $sql );
-		update_option( 'mltsa_db_version', MLTSA_DB_VERSION, false );
+		// dbDelta reports a column as added even when the database refused
+		// it, and a recorded version stops the upgrade being tried again, so
+		// record it only once the upgraded columns are really there.
+		if ( self::schema_ready() ) {
+			update_option( 'mltsa_db_version', MLTSA_DB_VERSION, false );
+		}
+	}
+
+	/**
+	 * Whether the database upgrade for this version has not completed (the
+	 * recorded version is set only once the new columns are there). While
+	 * it is pending, audits neither start nor run: the code would write
+	 * columns the tables do not have (branch review R5).
+	 *
+	 * @return bool
+	 */
+	public static function upgrade_pending() {
+		return (string) get_option( 'mltsa_db_version' ) !== MLTSA_DB_VERSION;
+	}
+
+	/**
+	 * Why audits are stopped while the upgrade is pending, for the Health
+	 * screen, the audit screens and WP-CLI.
+	 *
+	 * @return string
+	 */
+	public static function upgrade_message() {
+		return sprintf( 'The database schema is at version %s, not %s: the upgrade did not complete and is retried hourly. Audits do not start or run until it completes. Check that the database user may alter tables.', (string) get_option( 'mltsa_db_version' ), MLTSA_DB_VERSION );
+	}
+
+	/**
+	 * Whether every table exists with every column a database upgrade added.
+	 *
+	 * @return bool
+	 */
+	public static function schema_ready() {
+		global $wpdb;
+		foreach ( self::UPGRADE_COLUMNS as $suffix => $columns ) {
+			$have = (array) $wpdb->get_col( 'SHOW COLUMNS FROM ' . self::table( $suffix ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery -- Fixed table names from a constant list; read once per upgrade.
+			if ( array_diff( $columns, $have ) ) {
+				return false;
+			}
+		}
+		return true;
 	}
 }

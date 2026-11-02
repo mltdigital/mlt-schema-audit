@@ -155,6 +155,43 @@ class Settings {
 	}
 
 	/**
+	 * Whether someone has confirmed which content the audit reads.
+	 *
+	 * @return bool
+	 */
+	public static function scope_confirmed() {
+		return (bool) self::get( 'scope_confirmed' );
+	}
+
+	/**
+	 * The three set-up steps, in screen order, each with its state. The
+	 * Settings screen shows them as a checklist; monitoring_blockers() is
+	 * the same test in sentence form.
+	 *
+	 * @return array List of arrays with id, title and done.
+	 */
+	public static function setup_steps() {
+		$s = self::all();
+		return array(
+			array(
+				'id'    => 'scope',
+				'title' => __( 'Confirm the audit scope', 'mlt-schema-audit' ),
+				'done'  => ! empty( $s['scope_confirmed'] ),
+			),
+			array(
+				'id'    => 'schedule',
+				'title' => __( 'Confirm the monthly schedule', 'mlt-schema-audit' ),
+				'done'  => ! empty( $s['schedule_confirmed'] ),
+			),
+			array(
+				'id'    => 'recipients',
+				'title' => __( 'Add and confirm the email recipients', 'mlt-schema-audit' ),
+				'done'  => ! empty( $s['recipients'] ) && ! self::mail_paused(),
+			),
+		);
+	}
+
+	/**
 	 * Clone and staging guard (M3): mail pauses when the home URL is not the
 	 * one the recipients were confirmed on.
 	 *
@@ -258,6 +295,8 @@ class Settings {
 			$repo->log_event( $event, $changed, $user_id );
 		}
 		Ops\Scheduler::sync();
+		// A lifted kill switch or new recipients may unblock waiting mail.
+		Ops\Outbox::schedule_next();
 
 		return array(
 			'saved'  => true,
@@ -293,6 +332,7 @@ class Settings {
 			$user_id
 		);
 		Ops\Scheduler::sync();
+		Ops\Outbox::schedule_next();
 		return true;
 	}
 
@@ -399,7 +439,9 @@ class Settings {
 		$out = array();
 		foreach ( self::lines( $value, true ) as $line ) {
 			$email = sanitize_email( $line );
-			if ( '' === $email || ! is_email( $email ) ) {
+			// 254 characters is the longest address mail allows and the
+			// outbox column's size, so nothing is cut when it is stored.
+			if ( '' === $email || ! is_email( $email ) || strlen( $email ) > 254 ) {
 				/* translators: %s: the rejected text, escaped on output. */
 				$errors[] = sprintf( __( 'Not a valid email address: %s', 'mlt-schema-audit' ), $line );
 				return null;

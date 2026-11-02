@@ -1,8 +1,9 @@
 <?php
 /**
  * Rules that need the whole run: one business @id with different details on
- * different pages (SITE-001), and own-host images that return 404 or 410
- * (URL-004).
+ * different pages (SITE-001), own-host images that return 404 or 410
+ * (URL-004), and own-host sameAs profile links that return 404 or 410
+ * (URL-008).
  *
  * @package MLT\SchemaAudit
  */
@@ -68,6 +69,7 @@ class SiteRules {
 				'source'            => 'unknown',
 				'source_confidence' => 'low',
 				'site_wide'         => true,
+				'support'           => array(),
 			),
 			$data
 		);
@@ -106,12 +108,7 @@ class SiteRules {
 			if ( count( $ids ) < 2 ) {
 				continue;
 			}
-			uasort(
-				$ids,
-				static function ( $a, $b ) {
-					return count( $b ) - count( $a );
-				}
-			);
+			$ids   = self::by_count_desc( $ids );
 			$names = array_keys( $ids );
 			$main  = (string) $names[0];
 			foreach ( array_slice( $names, 1 ) as $other ) {
@@ -130,6 +127,7 @@ class SiteRules {
 							'path'        => $entry['path'],
 							'observed'    => $other,
 							'comparison'  => 'Same telephone and postcode as ' . $main . ', with no link between them',
+							'support'     => array_keys( $ids[ $main ] + $ids[ $other ] ),
 						)
 					);
 				}
@@ -165,14 +163,13 @@ class SiteRules {
 				if ( count( $values ) < 2 ) {
 					continue;
 				}
-				uasort(
-					$values,
-					static function ( $a, $b ) {
-						return count( $b ) - count( $a );
-					}
-				);
-				$keys   = array_keys( $values );
-				$common = (string) $keys[0];
+				$values  = self::by_count_desc( $values );
+				$keys    = array_keys( $values );
+				$common  = (string) $keys[0];
+				$support = array();
+				foreach ( $values as $pages_with ) {
+					$support += $pages_with;
+				}
 				foreach ( array_slice( $keys, 1 ) as $value ) {
 					foreach ( $values[ $value ] as $url_id => $entry ) {
 						$out[ $url_id ][] = self::finding(
@@ -186,6 +183,7 @@ class SiteRules {
 								'path'        => $entry['path'],
 								'observed'    => (string) $value,
 								'comparison'  => sprintf( '%s on %d other page(s)', $common, count( $values[ $common ] ) ),
+								'support'     => array_keys( $support ),
 							)
 						);
 					}
@@ -277,12 +275,7 @@ class SiteRules {
 				}
 				// Most common value is the comparison; every page with a
 				// different value gets an occurrence of one site-wide issue.
-				uasort(
-					$values,
-					static function ( $a, $b ) {
-						return count( $b ) - count( $a );
-					}
-				);
+				$values  = self::by_count_desc( $values );
 				$keys    = array_keys( $values );
 				$common  = (string) $keys[0];
 				$display = array(
@@ -311,6 +304,7 @@ class SiteRules {
 							'source'            => 'unknown',
 							'source_confidence' => 'low',
 							'site_wide'         => true,
+							'support'           => array_keys( $per_page ),
 						);
 					}
 				}
@@ -320,18 +314,38 @@ class SiteRules {
 	}
 
 	/**
-	 * Distinct own-host resources across the run, capped.
+	 * A map of lists ordered by list size, largest first; ties keep their
+	 * original order. PHP 8 sorts are stable, PHP 7.4 sorts are not, so the
+	 * tie is broken explicitly and the most common value (and the issue it
+	 * names) is the same on both.
 	 *
-	 * @param array $pages run_url_id => site facts (resources key used).
+	 * @param array $map Key => list.
+	 * @return array
+	 */
+	public static function by_count_desc( array $map ) {
+		$order = array_flip( array_keys( $map ) );
+		uksort(
+			$map,
+			static function ( $a, $b ) use ( $map, $order ) {
+				$diff = count( $map[ $b ] ) - count( $map[ $a ] );
+				return 0 !== $diff ? $diff : $order[ $a ] - $order[ $b ];
+			}
+		);
+		return $map;
+	}
+
+	/**
+	 * Distinct own-host resources across the run, capped: images and files
+	 * (URL-004) and sameAs profile links (URL-008) share one budget.
+	 *
+	 * @param array $pages run_url_id => site facts (resources and profile_links keys used).
 	 * @return array url => list of { url_id, prop, path, block }
 	 */
 	public static function resources( array $pages ) {
 		$out = array();
 		foreach ( $pages as $url_id => $facts ) {
-			if ( empty( $facts['resources'] ) ) {
-				continue;
-			}
-			foreach ( $facts['resources'] as $url => $where ) {
+			foreach ( self::page_resources( $facts ) as $pair ) {
+				list( $url, $where ) = $pair;
 				if ( ! isset( $out[ $url ] ) && count( $out ) >= self::MAX_RESOURCES ) {
 					continue;
 				}
@@ -342,7 +356,47 @@ class SiteRules {
 	}
 
 	/**
-	 * URL-004 finding for one broken resource on one page.
+	 * One page's own-host resources and profile links, as [ url, where ] pairs.
+	 * Facts stored before profile links were kept have no profile_links key.
+	 *
+	 * @param array $facts Site facts for one page.
+	 * @return array
+	 */
+	private static function page_resources( $facts ) {
+		$facts = (array) $facts;
+		$out   = array();
+		foreach ( array( 'resources', 'profile_links' ) as $key ) {
+			if ( empty( $facts[ $key ] ) || ! is_array( $facts[ $key ] ) ) {
+				continue;
+			}
+			foreach ( $facts[ $key ] as $url => $where ) {
+				$out[] = array( (string) $url, (array) $where );
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Whether a resource is requested as a static file (the wider resource
+	 * path policy) rather than as a page. Only when every reference is an
+	 * image or file; a URL any page cites as a sameAs link is requested
+	 * under the normal page policy.
+	 *
+	 * @param array $where_list References from resources().
+	 * @return bool
+	 */
+	public static function is_file_check( array $where_list ) {
+		foreach ( $where_list as $where ) {
+			if ( isset( $where['prop'] ) && 'sameAs' === $where['prop'] ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * URL-004 finding for one broken resource on one page, or URL-008 when
+	 * the reference is a sameAs profile link.
 	 *
 	 * @param string $url    Resource URL.
 	 * @param array  $where  { prop, path, block }.
@@ -350,9 +404,10 @@ class SiteRules {
 	 * @return array
 	 */
 	public static function broken_resource( $url, array $where, $status ) {
-		$rule = Rules::get( 'URL-004' );
+		$rule_id = ( isset( $where['prop'] ) && 'sameAs' === $where['prop'] ) ? 'URL-008' : 'URL-004';
+		$rule    = Rules::get( $rule_id );
 		return array(
-			'rule_id'           => 'URL-004',
+			'rule_id'           => $rule_id,
 			'rule_version'      => (int) $rule['version'],
 			'outcome'           => 'fail',
 			'severity'          => $rule['severity'],
@@ -368,7 +423,99 @@ class SiteRules {
 			'source'            => 'unknown',
 			'source_confidence' => 'low',
 			'site_wide'         => true,
+			'support'           => array(),
 		);
+	}
+
+	/**
+	 * Evidence behind each site-wide issue in this run: the pages whose facts
+	 * the finding rests on (every page carrying the entity, not only the
+	 * page that differs) and, for URL-004 and URL-008, the resource itself.
+	 * The issue register clears a site-wide issue only when all of it is
+	 * read again.
+	 *
+	 * @param array $pages run_url_id => site facts.
+	 * @param array $urls  run_url_id => URL.
+	 * @return array issue_key => sorted refs (page url_key, or resource:<url>)
+	 */
+	public static function evidence( array $pages, array $urls ) {
+		$refs = array();
+		$add  = static function ( $key, array $url_ids ) use ( &$refs, $urls ) {
+			foreach ( $url_ids as $url_id ) {
+				if ( isset( $urls[ $url_id ] ) ) {
+					$refs[ $key ][ Evaluator::url_key( $urls[ $url_id ] ) ] = true;
+				}
+			}
+		};
+		foreach ( self::evaluate( $pages ) as $url_id => $findings ) {
+			foreach ( $findings as $finding ) {
+				$add( Comparator::issue_key( '', $finding ), array_merge( array( $url_id ), $finding['support'] ) );
+			}
+		}
+		foreach ( self::resources( $pages ) as $url => $where_list ) {
+			foreach ( $where_list as $where ) {
+				$key                                = Comparator::issue_key( '', self::broken_resource( $url, $where, 404 ) );
+				$refs[ $key ][ 'resource:' . $url ] = true;
+				$add( $key, array( $where['url_id'] ) );
+			}
+		}
+		foreach ( $refs as $key => $set ) {
+			$list = array_keys( $set );
+			sort( $list );
+			$refs[ $key ] = $list;
+		}
+		return $refs;
+	}
+
+	/**
+	 * Every own-host resource referenced by a page read in this run, with
+	 * the outcome of its check. A resource referenced but not checked (over
+	 * the cap, or the check did not finish) is "unchecked", which holds any
+	 * issue that rests on it.
+	 *
+	 * @param array $pages    run_url_id => site facts (resources and profile_links keys used).
+	 * @param array $outcomes Resource URL => fetch outcome, from the check.
+	 * @return array url => outcome
+	 */
+	public static function resource_outcomes( array $pages, array $outcomes ) {
+		$out = array();
+		foreach ( $pages as $facts ) {
+			foreach ( self::page_resources( $facts ) as $pair ) {
+				$url         = $pair[0];
+				$out[ $url ] = isset( $outcomes[ $url ] ) ? (string) $outcomes[ $url ] : 'unchecked';
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Image, file and profile link check counts for the run summary:
+	 * referenced by a page read, attempted (not over the cap or left
+	 * unfinished), checked (an answer received: found, 404 or 410) and
+	 * broken (404 or 410).
+	 *
+	 * @param array $outcomes Resource URL => outcome, from resource_outcomes().
+	 * @return array
+	 */
+	public static function resource_counts( array $outcomes ) {
+		$counts = array(
+			'referenced' => count( $outcomes ),
+			'attempted'  => 0,
+			'checked'    => 0,
+			'broken'     => 0,
+		);
+		foreach ( $outcomes as $outcome ) {
+			if ( 'unchecked' !== $outcome ) {
+				++$counts['attempted'];
+			}
+			if ( in_array( $outcome, array( 'ok', 'not_found', 'gone' ), true ) ) {
+				++$counts['checked'];
+			}
+			if ( in_array( $outcome, array( 'not_found', 'gone' ), true ) ) {
+				++$counts['broken'];
+			}
+		}
+		return $counts;
 	}
 
 	/**

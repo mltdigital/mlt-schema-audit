@@ -7,6 +7,8 @@
  * an excluded URL, a removed or changed rule or a reduced scope never sets
  * "no longer detected"; a removed or redirected page gets its own state; a
  * new or changed rule is labelled as a rule change, not a website change.
+ * A site-wide issue is cleared only when every page and resource it rested
+ * on was read again; a full-scope run alone is not enough.
  *
  * @package MLT\SchemaAudit
  */
@@ -39,6 +41,19 @@ class Comparator {
 	 * Page coverage outcomes that mean we could not tell.
 	 */
 	const UNKNOWN = array( 'timeout', 'error', 'unavailable', 'blocked', 'too_large', 'http_error', 'redirect_limit', 'pending' );
+
+	/**
+	 * Page outcomes that settle a site-wide issue's evidence on that page:
+	 * read, conclusively gone, or read and not HTML (so it carries no
+	 * JSON-LD), as for a page that has left the site (branch review R2).
+	 */
+	const SETTLED = array( 'ok', 'not_found', 'gone', 'redirected', 'not_html' );
+
+	/**
+	 * Audits in a row an issue must be held as unavailable before the
+	 * coverage figure counts it as repeatedly unchecked.
+	 */
+	const REPEAT_UNAVAILABLE = 2;
 
 	/**
 	 * Stable identity for an issue: site-wide issues by rule, entity and
@@ -79,14 +94,19 @@ class Comparator {
 	 * @param array  $fingerprint  rule_id => version for this run.
 	 * @param array  $prior_fingerprint rule_id => version of the previous comparable run, or empty.
 	 * @param bool   $full_scope   Whether this run covered the full scope (site-wide rules ran).
-	 * @return array { insert: issue_key => fields, update: issue_key => fields, events: list, summary }
+	 * @param array  $resources    Resource URL => check outcome, for every resource a page read in this run references.
+	 * @param array  $gone         url_key => true for evidence pages that have left the site (no longer
+	 *                             a published page), so are settled although this run did not list them.
+	 * @return array { insert: issue_key => fields, update: issue_key => fields, events: list,
+	 *                 unavailable: issue keys held as unavailable in this run, summary }
 	 */
-	public static function reconcile( array $issues, array $findings, array $pages, array $fingerprint, array $prior_fingerprint, $full_scope ) {
+	public static function reconcile( array $issues, array $findings, array $pages, array $fingerprint, array $prior_fingerprint, $full_scope, array $resources = array(), array $gone = array() ) {
 		$out = array(
-			'insert'  => array(),
-			'update'  => array(),
-			'events'  => array(),
-			'summary' => array(
+			'insert'      => array(),
+			'update'      => array(),
+			'events'      => array(),
+			'unavailable' => array(),
+			'summary'     => array(
 				'new'                => 0,
 				'new_rule_change'    => 0,
 				'returned'           => 0,
@@ -157,6 +177,30 @@ class Comparator {
 				if ( ! $full_scope ) {
 					continue;
 				}
+				$evidence = self::evidence_state( self::refs( $issue, $pages ), $pages, $resources, $gone );
+				if ( 'unknown' === $evidence ) {
+					if ( 'unavailable' !== $issue['verification_state'] ) {
+						$out['update'][ $key ] = array( 'verification_state' => 'unavailable' );
+					}
+					++$out['summary']['unavailable'];
+					$out['unavailable'][] = $key;
+					continue;
+				}
+				if ( 'outside' === $evidence ) {
+					// An evidence page may still be on the site but is outside
+					// this audit: never cleared, held as unavailable so the
+					// coverage figure counts it (owner decision, R2).
+					if ( 'unavailable' !== $issue['verification_state'] ) {
+						$out['update'][ $key ] = array( 'verification_state' => 'unavailable' );
+						$out['events'][]       = array( $key, 'held_outside_scope', 'A page this issue rests on is outside the audit (post type not audited, over the page limit, excluded, or no longer listed), so it can be neither confirmed nor cleared.' );
+					}
+					++$out['summary']['unavailable'];
+					$out['unavailable'][] = $key;
+					continue;
+				}
+				if ( 'missing' === $evidence ) {
+					continue; // No page evidence at all: untouched.
+				}
 				if ( ! $rule_same ) {
 					++$out['summary']['rule_change_held'];
 					continue;
@@ -186,9 +230,135 @@ class Comparator {
 					$out['update'][ $key ] = array( 'verification_state' => 'unavailable' );
 				}
 				++$out['summary']['unavailable'];
+				$out['unavailable'][] = $key;
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * How many audits in a row each issue has been held as unavailable.
+	 * Read-only bookkeeping for the coverage figure: it never changes an
+	 * issue's state.
+	 *
+	 * @param array $previous    Issue ID => audits in a row, from the last finished run.
+	 * @param array $unavailable Issue IDs held as unavailable in this run.
+	 * @param array $still       Issue IDs still unavailable but outside this run's scope (carried over).
+	 * @return array Issue ID => audits in a row.
+	 */
+	public static function unavailable_streaks( array $previous, array $unavailable, array $still ) {
+		$out = array();
+		foreach ( $unavailable as $id ) {
+			$id         = (int) $id;
+			$out[ $id ] = ( isset( $previous[ $id ] ) ? (int) $previous[ $id ] : 0 ) + 1;
+		}
+		foreach ( $still as $id ) {
+			$id = (int) $id;
+			if ( ! isset( $out[ $id ] ) && isset( $previous[ $id ] ) ) {
+				$out[ $id ] = (int) $previous[ $id ];
+			}
+		}
+		ksort( $out );
+		return $out;
+	}
+
+	/**
+	 * The coverage figure: issues held as unavailable in this run for at
+	 * least REPEAT_UNAVAILABLE audits in a row, longest first.
+	 *
+	 * @param array $streaks     Issue ID => audits in a row.
+	 * @param array $unavailable Issue IDs held as unavailable in this run.
+	 * @return array { min_runs, issues, longest, ids (at most 50) }
+	 */
+	public static function repeat_unavailable( array $streaks, array $unavailable ) {
+		$hits = array();
+		foreach ( $unavailable as $id ) {
+			$id = (int) $id;
+			if ( isset( $streaks[ $id ] ) && $streaks[ $id ] >= self::REPEAT_UNAVAILABLE ) {
+				$hits[ $id ] = (int) $streaks[ $id ];
+			}
+		}
+		uksort(
+			$hits,
+			static function ( $a, $b ) use ( $hits ) {
+				return $hits[ $b ] === $hits[ $a ] ? $a - $b : $hits[ $b ] - $hits[ $a ];
+			}
+		);
+		return array(
+			'min_runs' => self::REPEAT_UNAVAILABLE,
+			'issues'   => count( $hits ),
+			'longest'  => empty( $hits ) ? 0 : max( $hits ),
+			'ids'      => array_slice( array_keys( $hits ), 0, 50 ),
+		);
+	}
+
+	/**
+	 * The evidence refs stored for a site-wide issue. An issue stored before
+	 * evidence was recorded falls back to every page in this run's scope
+	 * (and its resource, for URL-004), so it clears only on full coverage.
+	 *
+	 * @param array $issue Issue row (evidence, entity_key).
+	 * @param array $pages url_key => coverage for this run.
+	 * @return array
+	 */
+	public static function refs( array $issue, array $pages ) {
+		$refs = isset( $issue['evidence'] ) ? json_decode( (string) $issue['evidence'], true ) : null;
+		if ( is_array( $refs ) && ! empty( $refs ) ) {
+			return array_values( array_map( 'strval', $refs ) );
+		}
+		$refs   = array_map( 'strval', array_keys( $pages ) );
+		$entity = isset( $issue['entity_key'] ) ? (string) $issue['entity_key'] : '';
+		if ( 0 === strpos( $entity, 'resource:' ) ) {
+			$refs[] = $entity;
+		}
+		return $refs;
+	}
+
+	/**
+	 * Whether the evidence behind a site-wide issue was read in this run.
+	 *
+	 * "read": every page was read (HTML or not) or has conclusively gone,
+	 * including a page no longer published at all ($gone), and every
+	 * resource was checked or is no longer referenced by any page read.
+	 * "unknown": a page or resource could not be read (timeout, error,
+	 * pending, over the resource cap). "outside": a page that may still be
+	 * on the site is outside this run (excluded, over the URL cap, post type
+	 * out of scope, or not listed). "missing": no page evidence at all.
+	 *
+	 * @param array $refs      Page url_keys and resource:<url> refs.
+	 * @param array $pages     url_key => coverage for this run.
+	 * @param array $resources Resource URL => check outcome, for every resource a page read in this run references.
+	 * @param array $gone      url_key => true for pages that have left the site.
+	 * @return string read|unknown|outside|missing
+	 */
+	public static function evidence_state( array $refs, array $pages, array $resources, array $gone = array() ) {
+		$settled = array_merge( self::EVALUATED, self::REMOVED );
+		$read    = 0;
+		$held    = 0;
+		foreach ( $refs as $ref ) {
+			$ref = (string) $ref;
+			if ( 0 === strpos( $ref, 'resource:' ) ) {
+				$url = substr( $ref, strlen( 'resource:' ) );
+				if ( isset( $resources[ $url ] ) && ! in_array( $resources[ $url ], $settled, true ) ) {
+					return 'unknown';
+				}
+				continue; // Checked, or no page read in this run references it.
+			}
+			$coverage = isset( $pages[ $ref ] ) ? $pages[ $ref ] : '';
+			if ( in_array( $coverage, self::UNKNOWN, true ) ) {
+				return 'unknown';
+			}
+			if ( in_array( $coverage, self::SETTLED, true ) || ( '' === $coverage && isset( $gone[ $ref ] ) ) ) {
+				++$read;
+			} else {
+				++$held;
+			}
+		}
+		if ( $held > 0 ) {
+			return 'outside';
+		}
+		// Every finding rests on at least one page, so no page ref means no evidence.
+		return $read > 0 ? 'read' : 'missing';
 	}
 
 	/**
@@ -197,28 +367,33 @@ class Comparator {
 	 * Formatting-only changes (whitespace, key order) do not count, because
 	 * markup is compared by canonical hash.
 	 *
-	 * @param array $baseline { findings: key => observed_hash, pages: url_key => { coverage, markup } , fingerprint }.
-	 * @param array $current  Same shape.
+	 * @param array $baseline { findings: key => { hash, rule_id, page, refs (site-wide) }, pages: url_key => { coverage, markup } , fingerprint }.
+	 * @param array $current  Same shape, plus resources: resource URL => check outcome.
 	 * @param array $ever     Issue keys seen in any run before the baseline.
 	 * @return array
 	 */
 	public static function compare( array $baseline, array $current, array $ever = array() ) {
 		$result = array(
-			'new'             => array(),
-			'new_rule_change' => array(),
-			'returned'        => array(),
-			'resolved'        => array(),
-			'changed'         => array(),
-			'unchanged'       => array(),
-			'pages_added'     => array(),
-			'pages_removed'   => array(),
-			'markup_changed'  => array(),
-			'coverage_lost'   => array(),
-			'rules_changed'   => array(),
+			'new'                 => array(),
+			'new_rule_change'     => array(),
+			'returned'            => array(),
+			'resolved'            => array(),
+			'held_rule_change'    => array(),
+			'changed'             => array(),
+			'changed_rule_change' => array(),
+			'unchanged'           => array(),
+			'pages_added'         => array(),
+			'pages_removed'       => array(),
+			'markup_changed'      => array(),
+			'coverage_lost'       => array(),
+			'rules_changed'       => array(),
 		);
-		foreach ( $current['fingerprint'] as $rule => $version ) {
-			if ( ! isset( $baseline['fingerprint'][ $rule ] ) || (int) $baseline['fingerprint'][ $rule ] !== (int) $version ) {
-				$result['rules_changed'][] = $rule;
+		// A rule counts as changed when it was added, removed or re-versioned,
+		// so look at the union of both runs' rule IDs, not only the current set.
+		$rule_ids = array_unique( array_merge( array_keys( $baseline['fingerprint'] ), array_keys( $current['fingerprint'] ) ) );
+		foreach ( $rule_ids as $rule ) {
+			if ( ! isset( $baseline['fingerprint'][ $rule ], $current['fingerprint'][ $rule ] ) || (int) $baseline['fingerprint'][ $rule ] !== (int) $current['fingerprint'][ $rule ] ) {
+				$result['rules_changed'][] = (string) $rule;
 			}
 		}
 		foreach ( $current['findings'] as $key => $item ) {
@@ -231,10 +406,19 @@ class Comparator {
 					$result['new'][] = $key;
 				}
 			} elseif ( $baseline['findings'][ $key ]['hash'] !== $item['hash'] ) {
-				$result['changed'][] = $key;
+				if ( in_array( $item['rule_id'], $result['rules_changed'], true ) ) {
+					$result['changed_rule_change'][] = $key;
+				} else {
+					$result['changed'][] = $key;
+				}
 			} else {
 				$result['unchanged'][] = $key;
 			}
+		}
+		$coverage  = array();
+		$resources = isset( $current['resources'] ) ? (array) $current['resources'] : array();
+		foreach ( $current['pages'] as $page => $info ) {
+			$coverage[ $page ] = $info['coverage'];
 		}
 		foreach ( $baseline['findings'] as $key => $item ) {
 			if ( isset( $current['findings'][ $key ] ) ) {
@@ -242,9 +426,20 @@ class Comparator {
 			}
 			$page = isset( $item['page'] ) ? $item['page'] : '';
 			// Only a page read in both runs, under the same rule version, can
-			// show an issue as resolved.
-			$read = '' === $page || ( isset( $current['pages'][ $page ] ) && 'ok' === $current['pages'][ $page ]['coverage'] );
-			if ( $read && ! in_array( $item['rule_id'], $result['rules_changed'], true ) ) {
+			// show an issue as resolved; a site-wide issue needs all of its
+			// evidence read.
+			if ( '' === $page ) {
+				$read = 'read' === self::evidence_state( isset( $item['refs'] ) ? (array) $item['refs'] : array(), $coverage, $resources, isset( $current['gone'] ) ? (array) $current['gone'] : array() );
+			} else {
+				$read = isset( $current['pages'][ $page ] ) && 'ok' === $current['pages'][ $page ]['coverage'];
+			}
+			if ( ! $read ) {
+				continue;
+			}
+			// A removed or changed rule is not a website fix: the issue is held.
+			if ( in_array( $item['rule_id'], $result['rules_changed'], true ) ) {
+				$result['held_rule_change'][] = $key;
+			} else {
 				$result['resolved'][] = $key;
 			}
 		}
@@ -276,7 +471,7 @@ class Comparator {
 	 * @return bool
 	 */
 	public static function is_meaningful( array $comparison ) {
-		foreach ( array( 'new', 'new_rule_change', 'returned', 'resolved', 'changed', 'pages_added', 'pages_removed', 'markup_changed', 'coverage_lost' ) as $list ) {
+		foreach ( array( 'new', 'new_rule_change', 'returned', 'resolved', 'held_rule_change', 'changed', 'changed_rule_change', 'pages_added', 'pages_removed', 'markup_changed', 'coverage_lost' ) as $list ) {
 			if ( ! empty( $comparison[ $list ] ) ) {
 				return true;
 			}

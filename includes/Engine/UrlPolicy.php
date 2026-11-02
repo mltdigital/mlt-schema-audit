@@ -5,7 +5,9 @@
  * Threat model F1, F2, F6: only the site's own host (and its www/bare
  * variant), only ports 80, 443 or the home URL's own port, never admin,
  * login, XML-RPC or REST routes, never a private, loopback, link-local or
- * metadata address. Query strings are dropped by default.
+ * metadata address. Query strings are dropped by default. Image and logo
+ * checks (resources) may also request static files under /wp-content/ and
+ * /wp-includes/, never scripts.
  *
  * @package MLT\SchemaAudit
  */
@@ -70,14 +72,28 @@ class UrlPolicy {
 		'#^/xmlrpc\.php#i',
 		'#^/wp-json(/|$)#i',
 		'#^/wp-cron\.php#i',
-		'#^/wp-content/#i',
-		'#^/wp-includes/#i',
 		'#/feed/?$#i',
 		'#^/cart/?#i',
 		'#^/checkout/?#i',
 		'#^/my-account/?#i',
 		'#/(logout|log-out|sign-out)/?#i',
 	);
+
+	/**
+	 * WordPress code and upload folders: never requested as pages, but an
+	 * image or logo check may request a static file inside them.
+	 *
+	 * @var array
+	 */
+	private static $asset_paths = array(
+		'#^/wp-content/#i',
+		'#^/wp-includes/#i',
+	);
+
+	/**
+	 * File types an image or logo check may request inside the asset folders.
+	 */
+	const RESOURCE_EXTENSIONS = 'avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp|pdf|mp4|webm';
 
 	/**
 	 * Constructor.
@@ -169,17 +185,19 @@ class UrlPolicy {
 		if ( isset( $parts['port'] ) ) {
 			$out .= ':' . (int) $parts['port'];
 		}
-		$out .= isset( $parts['path'] ) && '' !== $parts['path'] ? $parts['path'] : '/';
+		$out .= isset( $parts['path'] ) && '' !== $parts['path'] ? self::remove_dot_segments( $parts['path'] ) : '/';
 		return $out;
 	}
 
 	/**
 	 * Check a URL against the request policy (not its address).
 	 *
-	 * @param string $url Absolute URL.
+	 * @param string $url         Absolute URL.
+	 * @param bool   $is_resource True for an image or logo check, which may
+	 *                            request static files in the asset folders.
 	 * @return array { ok: bool, reason: string }
 	 */
-	public function check_url( $url ) {
+	public function check_url( $url, $is_resource = false ) {
 		$parts = parse_url( (string) $url ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
 		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
 			return self::verdict( false, 'invalid_url' );
@@ -200,10 +218,20 @@ class UrlPolicy {
 				return self::verdict( false, 'port_not_allowed' );
 			}
 		}
-		$path = isset( $parts['path'] ) ? rawurldecode( $parts['path'] ) : '/';
-		foreach ( self::$denied_paths as $pattern ) {
-			if ( preg_match( $pattern, $path ) ) {
-				return self::verdict( false, 'denied_path' );
+		// The deny list is checked against the path as sent and as a server
+		// would read it (decoded, dot segments and repeated slashes removed),
+		// so /public/../wp-admin/ and /%2e%2e/wp-admin/ are refused too.
+		$raw = isset( $parts['path'] ) ? $parts['path'] : '/';
+		foreach ( array( rawurldecode( $raw ), self::canonical_path( $raw ) ) as $path ) {
+			foreach ( self::$denied_paths as $pattern ) {
+				if ( preg_match( $pattern, $path ) ) {
+					return self::verdict( false, 'denied_path' );
+				}
+			}
+			foreach ( self::$asset_paths as $pattern ) {
+				if ( preg_match( $pattern, $path ) && ! ( $is_resource && self::is_static_file( $path ) ) ) {
+					return self::verdict( false, 'denied_path' );
+				}
 			}
 		}
 		if ( isset( $parts['query'] ) && preg_match( '/(^|&)(rest_route|action|_wpnonce|add-to-cart|logout)=/i', $parts['query'] ) ) {
@@ -272,6 +300,10 @@ class UrlPolicy {
 	/**
 	 * Classify an IP address.
 	 *
+	 * Addresses are judged by their bytes, never their spelling, so ::1,
+	 * 0:0:0:0:0:0:0:1 and ::ffff:7f00:1 are all loopback. IPv6 forms that
+	 * carry an IPv4 address (mapped, NAT64, 6to4) are judged as that address.
+	 *
 	 * @param string $ip IPv4 or IPv6 address.
 	 * @return string public|private|loopback|link_local|metadata|reserved|invalid
 	 */
@@ -280,56 +312,80 @@ class UrlPolicy {
 		if ( ! filter_var( $ip, FILTER_VALIDATE_IP ) ) {
 			return 'invalid';
 		}
-		// IPv4-mapped IPv6 (::ffff:127.0.0.1) is judged as the IPv4 inside it.
-		if ( preg_match( '/^::ffff:(\d+\.\d+\.\d+\.\d+)$/', $ip, $m ) ) {
-			$ip = $m[1];
-		}
-		if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
-			$long = ip2long( $ip );
-			$in   = static function ( $cidr ) use ( $long ) {
-				list( $net, $bits ) = explode( '/', $cidr );
-				$mask               = -1 << ( 32 - (int) $bits );
-				return ( $long & $mask ) === ( ip2long( $net ) & $mask );
-			};
-			if ( '169.254.169.254' === $ip || '100.100.100.200' === $ip ) {
-				return 'metadata';
-			}
-			if ( $in( '127.0.0.0/8' ) ) {
-				return 'loopback';
-			}
-			if ( $in( '169.254.0.0/16' ) ) {
-				return 'link_local';
-			}
-			if ( $in( '10.0.0.0/8' ) || $in( '172.16.0.0/12' ) || $in( '192.168.0.0/16' ) || $in( '100.64.0.0/10' ) ) {
-				return 'private';
-			}
-			if ( $in( '0.0.0.0/8' ) || $in( '192.0.0.0/24' ) || $in( '192.0.2.0/24' ) || $in( '198.18.0.0/15' ) || $in( '198.51.100.0/24' ) || $in( '203.0.113.0/24' ) || $in( '224.0.0.0/4' ) || $in( '240.0.0.0/4' ) ) {
-				return 'reserved';
-			}
-			return 'public';
-		}
-		if ( '::1' === $ip ) {
-			return 'loopback';
-		}
-		if ( '::' === $ip ) {
-			return 'reserved';
-		}
-		if ( 'fd00:ec2::254' === $ip ) {
-			return 'metadata';
-		}
 		$bin = inet_pton( $ip );
 		if ( false === $bin ) {
 			return 'invalid';
+		}
+		if ( 4 === strlen( $bin ) ) {
+			return self::classify_ipv4( $bin );
+		}
+		$mapped = str_repeat( "\0", 10 ) . "\xff\xff";
+		if ( substr( $bin, 0, 12 ) === $mapped ) {
+			return self::classify_ipv4( substr( $bin, 12 ) ); // ::ffff:0:0/96, IPv4-mapped.
+		}
+		if ( "\x00\x64\xff\x9b" . str_repeat( "\0", 8 ) === substr( $bin, 0, 12 ) ) {
+			return self::classify_ipv4( substr( $bin, 12 ) ); // 64:ff9b::/96, NAT64.
+		}
+		if ( "\x20\x02" === substr( $bin, 0, 2 ) ) {
+			return self::classify_ipv4( substr( $bin, 2, 4 ) ); // 2002::/16, 6to4.
+		}
+		if ( str_repeat( "\0", 15 ) . "\x01" === $bin ) {
+			return 'loopback';
+		}
+		if ( str_repeat( "\0", 8 ) === substr( $bin, 0, 8 ) ) {
+			// ::, IPv4-compatible ::/96 and IPv4-translated ::ffff:0:0:0/96.
+			return 'reserved';
+		}
+		if ( inet_pton( 'fd00:ec2::254' ) === $bin ) {
+			return 'metadata';
 		}
 		$first  = ord( $bin[0] );
 		$second = ord( $bin[1] );
 		if ( 0xfe === $first && 0x80 === ( $second & 0xc0 ) ) {
 			return 'link_local';
 		}
-		if ( 0xfc === ( $first & 0xfe ) ) {
+		if ( 0xfc === ( $first & 0xfe ) || ( 0xfe === $first && 0xc0 === ( $second & 0xc0 ) ) ) {
+			return 'private'; // fc00::/7 unique local, fec0::/10 old site-local.
+		}
+		if ( 0xff === $first ) {
+			return 'reserved';
+		}
+		if ( 0x20 === $first && 0x01 === $second && ( ( 0x0d === ord( $bin[2] ) && 0xb8 === ord( $bin[3] ) ) || "\0\0" === substr( $bin, 2, 2 ) ) ) {
+			return 'reserved'; // 2001:db8::/32 documentation, 2001::/32 Teredo.
+		}
+		if ( "\x00\x64\xff\x9b\x00\x01" === substr( $bin, 0, 6 ) ) {
+			return 'reserved'; // 64:ff9b:1::/48, local-use NAT64.
+		}
+		return 'public';
+	}
+
+	/**
+	 * Classify a packed IPv4 address.
+	 *
+	 * @param string $bin Four bytes.
+	 * @return string
+	 */
+	private static function classify_ipv4( $bin ) {
+		$ip   = inet_ntop( $bin );
+		$long = ip2long( $ip );
+		$in   = static function ( $cidr ) use ( $long ) {
+			list( $net, $bits ) = explode( '/', $cidr );
+			$mask               = -1 << ( 32 - (int) $bits );
+			return ( $long & $mask ) === ( ip2long( $net ) & $mask );
+		};
+		if ( '169.254.169.254' === $ip || '100.100.100.200' === $ip ) {
+			return 'metadata';
+		}
+		if ( $in( '127.0.0.0/8' ) ) {
+			return 'loopback';
+		}
+		if ( $in( '169.254.0.0/16' ) ) {
+			return 'link_local';
+		}
+		if ( $in( '10.0.0.0/8' ) || $in( '172.16.0.0/12' ) || $in( '192.168.0.0/16' ) || $in( '100.64.0.0/10' ) ) {
 			return 'private';
 		}
-		if ( 0xff === $first || ( 0x20 === $first && 0x01 === $second && 0x0d === ord( $bin[2] ) && 0xb8 === ord( $bin[3] ) ) ) {
+		if ( $in( '0.0.0.0/8' ) || $in( '192.0.0.0/24' ) || $in( '192.0.2.0/24' ) || $in( '198.18.0.0/15' ) || $in( '198.51.100.0/24' ) || $in( '203.0.113.0/24' ) || $in( '224.0.0.0/4' ) || $in( '240.0.0.0/4' ) ) {
 			return 'reserved';
 		}
 		return 'public';
@@ -401,21 +457,72 @@ class UrlPolicy {
 			$path   = $m[1];
 			$suffix = $m[2];
 		}
-		$out = array();
-		foreach ( explode( '/', $path ) as $seg ) {
+		return $origin . self::remove_dot_segments( $path ) . $suffix;
+	}
+
+	/**
+	 * Remove . and .. segments from a path (RFC 3986 section 5.2.4).
+	 *
+	 * @param string $path Path.
+	 * @return string Path starting with a slash.
+	 */
+	public static function remove_dot_segments( $path ) {
+		$segments = explode( '/', (string) $path );
+		$out      = array();
+		$last     = count( $segments ) - 1;
+		foreach ( $segments as $i => $seg ) {
 			if ( '..' === $seg ) {
 				if ( count( $out ) > 1 ) {
 					array_pop( $out );
 				}
 			} elseif ( '.' !== $seg ) {
 				$out[] = $seg;
+				continue;
+			}
+			if ( $i === $last ) {
+				$out[] = ''; // A trailing dot segment leaves a directory: /a/b/.. is /a/.
 			}
 		}
 		$path = implode( '/', $out );
 		if ( '' === $path || '/' !== $path[0] ) {
 			$path = '/' . $path;
 		}
-		return $origin . $path . $suffix;
+		return $path;
+	}
+
+	/**
+	 * A path as a web server would read it, for policy checks only: percent
+	 * decoding repeated until stable, backslashes as slashes, repeated
+	 * slashes collapsed, dot segments removed.
+	 *
+	 * @param string $path Raw path.
+	 * @return string
+	 */
+	public static function canonical_path( $path ) {
+		$path = (string) $path;
+		for ( $i = 0; $i < 3; $i++ ) {
+			$decoded = rawurldecode( $path );
+			if ( $decoded === $path ) {
+				break;
+			}
+			$path = $decoded;
+		}
+		$path = str_replace( '\\', '/', $path );
+		$path = (string) preg_replace( '#/{2,}#', '/', $path );
+		return self::remove_dot_segments( $path );
+	}
+
+	/**
+	 * Whether a decoded path names a static file an image check may request:
+	 * an image, PDF or video extension at the end, and no script extension
+	 * anywhere (so run.php/a.png and a.php.png are refused).
+	 *
+	 * @param string $path Decoded path.
+	 * @return bool
+	 */
+	private static function is_static_file( $path ) {
+		return (bool) preg_match( '#\.(' . self::RESOURCE_EXTENSIONS . ')$#i', $path )
+			&& ! preg_match( '#\.(php\d*|phtml|phar|pht|phps|cgi|pl|py|sh|aspx?|jsp)(?![a-z0-9])#i', $path );
 	}
 
 	/**

@@ -162,3 +162,132 @@ mltsa_test(
 		check( $a !== $c, 'array order significant' );
 	}
 );
+
+mltsa_test(
+	'Review 8: JSON-LD in comments and other inert contexts is not markup; real scripts around them still are',
+	static function () {
+		$ld   = '<script type="application/ld+json">{"@context":"https://schema.org","@type":"%s","name":"X"}</script>';
+		$live = sprintf( $ld, 'LegalService' );
+		$only = static function ( $html ) {
+			return ( new Extractor() )->extract( $html )['blocks'];
+		};
+
+		check_same( 0, count( $only( '<body><!-- ' . sprintf( $ld, 'Organization' ) . ' --></body>' ) ), 'HTML comment' );
+		check_same( 0, count( $only( '<body><!--' . sprintf( $ld, 'Organization' ) ) ), 'Unterminated comment runs to the end' );
+		check_same( 0, count( $only( '<textarea>' . sprintf( $ld, 'Organization' ) . '</textarea>' ) ), 'textarea example' );
+		check_same( 0, count( $only( '<TEXTAREA rows=3>' . sprintf( $ld, 'Organization' ) . '</TEXTAREA >' ) ), 'textarea, odd case' );
+		check_same( 0, count( $only( '<template><div>' . sprintf( $ld, 'Organization' ) . '</div></template>' ) ), 'template' );
+		check_same( 0, count( $only( '<template><template></template>' . sprintf( $ld, 'Organization' ) . '</template>' ) ), 'nested template' );
+		check_same( 0, count( $only( '<noscript>' . sprintf( $ld, 'Organization' ) . '</noscript>' ) ), 'noscript' );
+		check_same( 0, count( $only( '<xmp>' . sprintf( $ld, 'Organization' ) . '</xmp>' ) ), 'xmp' );
+		check_same( 0, count( $only( '<body><plaintext>' . sprintf( $ld, 'Organization' ) ) ), 'plaintext' );
+		check_same( 0, count( $only( '<title>' . sprintf( $ld, 'Organization' ) . '</title>' ) ), 'title' );
+		check_same( 0, count( $only( '<div data-x="' . htmlspecialchars( sprintf( $ld, 'Organization' ) ) . '"></div><p title=\'<script type="application/ld+json">{}</script>\'>x</p>' ) ), 'Script text inside an attribute value' );
+
+		// A comment or inert element does not hide the real block next to it.
+		$blocks = $only( '<!-- ' . sprintf( $ld, 'Organization' ) . ' -->' . $live . '<textarea>' . sprintf( $ld, 'Person' ) . '</textarea>' . '<template></template>' );
+		check_same( 1, count( $blocks ), 'Only the live block' );
+		check_same( 'LegalService', $blocks[0]['data']['@type'], 'The live block is the one kept' );
+
+		// A comment closed with --!> or an empty comment ends where a browser ends it.
+		check_same( 1, count( $only( '<!--x--!>' . $live ) ), 'Comment closed by --!>' );
+		check_same( 1, count( $only( '<!-->' . $live ) ), 'Empty comment <!-->' );
+
+		// A ">" inside a quoted attribute does not end the script tag early.
+		$blocks = $only( '<script data-note="a > b" type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService"}</script>' );
+		check_same( 1, count( $blocks ), 'Quoted ">" in a script attribute' );
+		check_same( 'ok', $blocks[0]['parse'], 'and the content is the JSON, not the rest of the tag' );
+
+		// Raw text rules inside a real script are unchanged: "<" and comment markers in the JSON are content.
+		$blocks = $only( '<script type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService","description":"a <!-- b <textarea> c"}</script>' );
+		check_same( 'ok', $blocks[0]['parse'], 'Markup-like text inside the JSON string' );
+
+		// And the commented block no longer produces findings or corroboration.
+		$result = audit_html( '<html><head><!-- ' . sprintf( $ld, 'LegalService' ) . ' --></head><body><p>Hello</p></body></html>' );
+		check( ! in_array( 'SYN-001', rule_ids( $result['findings'] ), true ), 'No syntax finding from disabled markup' );
+	}
+);
+
+mltsa_test(
+	'Review ENG-1: a CDATA wrapper commented out with a block comment is removed',
+	static function () {
+		$json    = '{"@context":"https://schema.org","@type":"LegalService","name":"X"}';
+		$wrapped = array(
+			'block comments'       => "/* <![CDATA[ */\n{$json}\n/* ]]> */",
+			'block, no spaces'     => "/*<![CDATA[*/{$json}/*]]>*/",
+			'line comments'        => "//<![CDATA[\n{$json}\n//]]>",
+			'plain CDATA'          => "<![CDATA[{$json}]]>",
+			'inside HTML comment'  => "<!--\n/* <![CDATA[ */\n{$json}\n/* ]]> */\n-->",
+		);
+		foreach ( $wrapped as $label => $content ) {
+			$blocks = ( new Extractor() )->extract( '<script type="application/ld+json">' . $content . '</script>' )['blocks'];
+			check_same( 'ok', $blocks[0]['parse'], $label . ' parses' );
+			check_same( 'LegalService', $blocks[0]['data']['@type'], $label . ' keeps the data' );
+		}
+	}
+);
+
+mltsa_test(
+	'Review ENG-2: multi-valued properties split across definitions of one @id are combined; single-valued ones stay first-wins',
+	static function () {
+		$ch   = 'https://find-and-update.company-information.service.gov.uk/company/SC123456';
+		$base = array( '@context' => 'https://schema.org', '@type' => 'LegalService', '@id' => 'https://www.example-legal.co.uk/#org' );
+		$page = static function ( array $a, array $b ) use ( $base ) {
+			return '<html><head><script type="application/ld+json">' . json_encode( $base + $a ) . '</script>'
+				. '<script type="application/ld+json">' . json_encode( $base + $b ) . '</script></head>'
+				. '<body><p>Example Legal, solicitors in Glasgow.</p></body></html>';
+		};
+
+		// The Companies House link is in the second block only, behind another sameAs there.
+		$split = audit_html( $page( array( 'name' => 'Example Legal', 'sameAs' => array( 'https://www.facebook.com/examplelegal' ) ), array( 'sameAs' => array( 'https://www.linkedin.com/company/examplelegal', $ch ) ) ) );
+		check( in_array( 'FACT-012', rule_ids( $split['findings'] ), true ), 'sameAs from the second definition is seen' );
+
+		// A string in one block and a list in the other combine too.
+		$mixed = audit_html( $page( array( 'name' => 'Example Legal', 'sameAs' => 'https://www.facebook.com/examplelegal' ), array( 'sameAs' => $ch ) ) );
+		check( in_array( 'FACT-012', rule_ids( $mixed['findings'] ), true ), 'string and string combine' );
+
+		// Single-valued properties keep their meaning: the first name wins and is still a string.
+		$names = audit_html( $page( array( 'name' => 'Example Legal' ), array( 'name' => 'Other Name' ) ) );
+		check( ! in_array( 'FACT-012', rule_ids( $names['findings'] ), true ), 'No company number, no FACT-012' );
+
+		// The combining rule: first's values, then new ones; one distinct value keeps its shape.
+		$combine = new ReflectionMethod( 'MLT\\SchemaAudit\\Engine\\Evaluator', 'combine_values' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$combine->setAccessible( true );
+		}
+		check_same( array( 'a', 'b', 'c' ), $combine->invoke( null, array( 'a', 'b' ), array( 'b', 'c' ) ), 'Lists combine without repeats' );
+		check_same( array( 'a', 'b' ), $combine->invoke( null, 'a', 'b' ), 'Two strings become a list' );
+		check_same( 'a', $combine->invoke( null, 'a', array( 'a' ) ), 'One distinct value keeps its shape' );
+		check_same( array( array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), array( 'postalCode' => 'G2 2BB', '@type' => 'PostalAddress' ) ), $combine->invoke( null, array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), array( 'postalCode' => 'G2 2BB', '@type' => 'PostalAddress' ) ), 'Two address objects become a list' );
+		check_same( array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), $combine->invoke( null, array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), array( 'postalCode' => 'G1 1AA', '@type' => 'PostalAddress' ) ), 'Same object in a different key order is one value' );
+	}
+);
+
+mltsa_test(
+	'Review BUG-1: extra staging hosts are matched as whole hosts, with subdomains, and are not regexes',
+	static function () {
+		$page = static function ( $host ) {
+			return '<script type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService","name":"X","image":"https://' . $host . '/logo.png"}</script>';
+		};
+		$ctx  = array( 'staging_patterns' => array( 'preview.partner-agency.co.uk', 'build.example-dev.net' ) );
+		check( in_array( 'URL-001', rule_ids( audit_html( $page( 'preview.partner-agency.co.uk' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'stored host matches itself' );
+		check( in_array( 'URL-001', rule_ids( audit_html( $page( 'a.preview.partner-agency.co.uk' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'a subdomain of the stored host matches, as the built-in suffix patterns do' );
+		check( ! in_array( 'URL-001', rule_ids( audit_html( $page( 'xpreview.partner-agency.co.uk' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'a longer host that merely ends with the text does not match' );
+		check( ! in_array( 'URL-001', rule_ids( audit_html( $page( 'buildxexample-dev.net' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'the dot is literal, not a wildcard' );
+		check( ! in_array( 'URL-001', rule_ids( audit_html( $page( 'cdn.example.org' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'unrelated host not flagged' );
+		check( in_array( 'URL-001', rule_ids( audit_html( $page( 'staging.example.org' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'built-in patterns still work alongside' );
+	}
+);
+
+mltsa_test(
+	'Review BUG-2: FACT-006 evidence shows approved numbers with the leading zero staff know',
+	static function () {
+		$html = '<script type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService","name":"X","telephone":"0141 496 0199"}</script>';
+		$out  = audit_html( $html, 'https://www.example-legal.co.uk/', array( 'approved_phones' => array( '1632960123', '1414960100' ) ) );
+		$hits = array_values( array_filter( $out['findings'], static function ( $f ) { return 'FACT-006' === $f['rule_id']; } ) );
+		check_same( 1, count( $hits ), 'FACT-006 reported for a number outside the approved list' );
+		check_same( 'Approved: 01632960123, 01414960100', $hits[0]['comparison'], 'approved numbers shown with the leading zero' );
+		$out2 = audit_html( $html, 'https://www.example-legal.co.uk/', array( 'approved_phones' => array( '1414960199' ) ) );
+		check( ! in_array( 'FACT-006', rule_ids( $out2['findings'] ), true ), 'matching is unchanged: an approved number is not flagged' );
+	}
+);

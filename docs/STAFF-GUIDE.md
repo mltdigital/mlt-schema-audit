@@ -41,6 +41,8 @@ Open **Findings** (or **View findings** on an audit). Each finding has:
 
 Open a finding to read what the rule checks, why it matters and what to check next.
 
+**Findings shows one audit; the Issue register shows everything outstanding.** Findings lists what a single audit read, newest by default. After a recheck of one page, issues on other pages are not in that audit, so they are not listed there. Open **Issue register** to see every issue across all audits as it stands now: its status, owner, due date, verification state, first and last observed, and the latest evidence. Filter by status, verification state or owner (including nobody), or search by page, rule or entity. An issue is never cleared because a page was not read: it keeps its earlier state or shows Unavailable.
+
 Common cases from the pilot:
 
 | You see | What it usually means |
@@ -49,7 +51,8 @@ Common cases from the pilot:
 | FACT-001 Telephone not found on the page | The schema number is not shown or linked on the page. It may be a typo, or a real unpublished line: ask the client before calling it an error |
 | FACT-007 Postcode contradicted by the page | The page prints the same street with a different postcode. Very likely wrong |
 | ID-005, SITE-002 Same business declared more than once | Several unlinked descriptions of one firm, often from two plugins |
-| URL-004 Linked file or page returns not found | A logo, image or profile page on this site returns 404 |
+| URL-004 Linked image or file returns not found | A logo, image or other file on this site returns 404 |
+| URL-008 Profile link on this site returns not found | A `sameAs` link to a page on this site (often a profile of someone who has left) returns 404. Links to other websites are not checked |
 
 ## Work status and verification
 
@@ -62,6 +65,8 @@ Only the scanner sets the **verification state**: Present, Changed, Returned, No
 
 - Marking a finding **Resolved** does not verify it. To confirm a fix, tick the finding and select **Recheck**, or wait for the next monthly audit.
 - A timeout, an excluded page, a removed rule or a smaller scope never sets "No longer detected".
+- A site-wide issue (one business shown differently on different pages, a broken image, and similar) is set to "No longer detected" only when every page it was seen on was read again, or has left the site (a post or page deleted or unpublished, a page answering "not found", or no longer a web page). If one of those pages could not be read, it shows "Unavailable" until a later audit reads it. If one of them may still be on the site but is outside the audit (its post type is no longer audited, it is over the page limit, it is excluded, or it was found only through a sitemap that is no longer read), the issue is never cleared: it shows "Unavailable", its history says a page it rests on is outside the audit, and it counts in the repeated "unavailable" figure.
+- "Unavailable" is a coverage problem, not a stable result. Each audit screen and export Summary shows how many findings were held as Unavailable in that audit, and how many have been Unavailable in 2 or more audits in a row, with links to them. If that number is not zero, find out why those pages or images cannot be read. The figure never changes a finding's status.
 - "New because a rule changed" means the audit changed, not the website.
 
 ## Exports
@@ -72,14 +77,18 @@ Cells that start with `=`, `+`, `-` or `@` are prefixed with an apostrophe so Ex
 
 ## Setting up monthly monitoring
 
-In **Settings** (needs `mltsa_manage`):
+Activating the plugin for the first time opens **Settings** (needs `mltsa_manage`). A set-up checklist at the top shows each step as **To do** or **Done**:
 
-1. **Scope**: choose the content types. The homepage is always included. Tick **The scope is confirmed**.
-2. **Schedule**: for example first Monday at 09:00, Europe/London. The screen shows the next three dates. **Stagger sites on the same server** across the first week (see the server cron note). Tick **The schedule is confirmed**.
-3. **Recipients**: named MLT or client addresses, one per line, at most 10. The site's admin address is never used.
+1. **Scope**: choose the content types. The homepage is always included. Tick **I have checked these content types and confirm this is the scope for this site**. No audit runs, manual or monthly, until this is done; the audit screen links here instead of offering **Start audit**. Changing the content types asks for it again.
+2. **Schedule**: for example first Monday at 09:00, Europe/London. The screen shows the next three dates. **Stagger sites on the same server** across the first week (see the server cron note). Tick **I confirm this schedule suits this site and its server**.
+3. **Recipients**: named MLT or client addresses, one per line, at most 10. The site's admin address is never used. Saving the list confirms it for this site address.
 4. Tick **Run the monthly audit and send the email** and save. It cannot be switched on until steps 1 to 3 are done.
 
 The email carries the site address, the date, counts and a login link. It never contains page titles, page addresses, evidence or notes. It is sent when something meaningful changed, on the first audit, or when an audit could not read every page (labelled as an operational alert, never an all-clear). "Submitted" on the Health screen means the site handed the email to its mail system; it does not prove delivery.
+
+## A slow audit on a small server
+
+Each page is read by asking the site itself for it. On a server with very few PHP workers (Local by Flywheel runs two), the open audit screen and WordPress cron can hold them all, so each page waits for the full timeout. The audit screen then says so. The audit still finishes. To speed it up, raise the PHP worker limit (`pm.max_children`) or run the audit with `wp mltsa audit --wait` or the server cron job, with the audit screen closed.
 
 ## Clones, staging copies and migrations
 
@@ -87,12 +96,15 @@ Recipients are confirmed against the site's address. If the address changes, all
 
 ## Stopping it quickly
 
-- **Kill switch setting** (Settings): stops scheduling and mail now, and cancels a monthly audit in progress. Manual audits still work.
+- **Kill switch setting** (Settings): stops scheduling and mail now, and cancels a monthly audit in progress. An audit that has already updated the issue register is left to finish (its email is still held). Manual audits still work.
+- **Cancel** (audit screen): stops the audit in progress. Once an audit has updated the issue register it can no longer be cancelled: it is finishing, and the screen says nothing was cancelled. A cancel that arrives while the register is being updated undoes that update.
 - **`define( 'MLTSA_DISABLE', true );`** in `wp-config.php`: stops scheduling, mail and manual audits. Use this across many sites at once.
 
 ## Health screen
 
 Shows, in plain English: kill switch, monitoring and the next start, recipients and any mail pause, the outbox, the scheduler's last run, the audit in progress, connection pinning, and versions. Check it after setup and whenever an email does not arrive.
+
+If a plugin update could not finish its database upgrade (for example, the database user may not alter tables), the Health screen shows a fail line and every Schema Audit screen shows the same message. Until the upgrade completes (it is retried hourly), no audit starts or runs, from the screens, the schedule or WP-CLI.
 
 ## Removing the plugin
 

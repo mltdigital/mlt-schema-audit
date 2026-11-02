@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       MLT Schema Audit
  * Description:       Read-only audit of the structured data (JSON-LD) in this site's server responses, with monthly change reports. It never creates, edits or removes schema.
- * Version:           0.1.0
+ * Version:           0.2.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            MLT Digital
@@ -14,9 +14,9 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MLTSA_VERSION', '0.1.0' );
+define( 'MLTSA_VERSION', '0.2.0' );
 define( 'MLTSA_ENGINE_VERSION', '1.0.0' );
-define( 'MLTSA_DB_VERSION', '1' );
+define( 'MLTSA_DB_VERSION', '2' );
 define( 'MLTSA_FILE', __FILE__ );
 define( 'MLTSA_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MLTSA_URL', plugin_dir_url( __FILE__ ) );

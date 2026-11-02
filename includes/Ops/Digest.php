@@ -111,7 +111,9 @@ class Digest {
 			$lines[] = sprintf( '  New because a rule changed (not a website change): %d', $n( 'new_rule_change' ) );
 			$lines[] = sprintf( '  Returned: %d', $n( 'returned' ) );
 			$lines[] = sprintf( '  Changed: %d', $n( 'changed' ) );
+			$lines[] = sprintf( '  Changed because a rule changed (not a website change): %d', $n( 'changed_rule_change' ) );
 			$lines[] = sprintf( '  No longer detected: %d', $n( 'resolved' ) );
+			$lines[] = sprintf( '  Not reported this time because a rule changed or was removed (not a fix): %d', $n( 'held_rule_change' ) );
 			$lines[] = sprintf( '  Pages with changed markup: %d', $n( 'markup_changed' ) );
 			$lines[] = sprintf( '  Pages added: %d, removed: %d', $n( 'pages_added' ), $n( 'pages_removed' ) );
 			$lines[] = sprintf( '  Pages read last time but not this time: %d', $n( 'coverage_lost' ) );

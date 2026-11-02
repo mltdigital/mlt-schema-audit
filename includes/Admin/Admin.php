@@ -32,12 +32,15 @@ class Admin {
 	const NOTICES = array(
 		'started'         => array( 'success', 'Audit started.' ),
 		'refused'         => array( 'error', 'The audit was not started: another audit is in progress, or MLTSA_DISABLE is set.' ),
+		'schema_outdated' => array( 'error', 'The audit was not started: the database upgrade has not completed. See the Health screen.' ),
 		'recheck_started' => array( 'success', 'Recheck started for the selected pages.' ),
 		'recheck_none'    => array( 'error', 'Nothing to recheck. Site-wide findings are rechecked by a full audit.' ),
 		'saved'           => array( 'success', 'Saved.' ),
 		'unchanged'       => array( 'info', 'Nothing changed.' ),
 		'invalid'         => array( 'error', 'Not saved. See the messages below.' ),
+		'scope_needed'    => array( 'error', 'The audit was not started: confirm the audit scope on the Settings screen first, so the audit reads the pages you expect.' ),
 		'cancelled'       => array( 'success', 'The audit was cancelled.' ),
+		'not_cancelled'   => array( 'info', 'Nothing was cancelled: no audit was in progress, or it had already updated the issue register and was finishing.' ),
 	);
 
 	/**
@@ -45,6 +48,7 @@ class Admin {
 	 */
 	public static function register() {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ) );
+		add_action( 'admin_init', array( __CLASS__, 'first_run_redirect' ) );
 		add_action( 'admin_enqueue_scripts', array( __CLASS__, 'assets' ) );
 		add_action( 'admin_post_mltsa_start', array( __CLASS__, 'handle_start' ) );
 		add_action( 'admin_post_mltsa_recheck', array( __CLASS__, 'handle_recheck' ) );
@@ -62,8 +66,31 @@ class Admin {
 		add_menu_page( 'MLT Schema Audit', 'Schema Audit', 'mltsa_audit', 'mltsa', array( Views::class, 'audits' ), 'dashicons-search', 81 );
 		add_submenu_page( 'mltsa', 'Audits', 'Audits', 'mltsa_audit', 'mltsa', array( Views::class, 'audits' ) );
 		add_submenu_page( 'mltsa', 'Findings', 'Findings', 'mltsa_audit', 'mltsa-findings', array( Views::class, 'findings' ) );
+		add_submenu_page( 'mltsa', 'Issue register', 'Issue register', 'mltsa_audit', 'mltsa-register', array( Views::class, 'register' ) );
 		add_submenu_page( 'mltsa', 'Settings', 'Settings', 'mltsa_manage', 'mltsa-settings', array( Views::class, 'settings' ) );
 		add_submenu_page( 'mltsa', 'Health', 'Health', 'mltsa_audit', 'mltsa-health', array( Views::class, 'health' ) );
+	}
+
+	/**
+	 * Open the Settings screen once after the first activation, so the
+	 * plugin is set up before anyone runs an audit. Skipped for AJAX, cron,
+	 * bulk activation and users who cannot manage settings.
+	 */
+	public static function first_run_redirect() {
+		if ( ! get_option( 'mltsa_activation_redirect' ) ) {
+			return;
+		}
+		if ( wp_doing_ajax() || wp_doing_cron() || is_network_admin() || isset( $_GET['activate-multi'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only flag set by core's bulk activation.
+			delete_option( 'mltsa_activation_redirect' );
+			return;
+		}
+		if ( ! current_user_can( 'mltsa_manage' ) ) {
+			return;
+		}
+		delete_option( 'mltsa_activation_redirect' );
+		update_option( 'mltsa_setup_seen', 1, false );
+		wp_safe_redirect( admin_url( 'admin.php?page=mltsa-settings' ) );
+		exit;
 	}
 
 	/**
@@ -145,13 +172,26 @@ class Admin {
 	}
 
 	/**
+	 * The notice for a start that was refused, naming a pending database
+	 * upgrade when that is the reason.
+	 *
+	 * @return string Notice code.
+	 */
+	private static function refusal() {
+		return \MLT\SchemaAudit\Installer::upgrade_pending() ? 'schema_outdated' : 'refused';
+	}
+
+	/**
 	 * Start a manual audit.
 	 */
 	public static function handle_start() {
 		self::require_cap( 'mltsa_audit' );
 		check_admin_referer( 'mltsa_start' );
+		if ( ! Settings::scope_confirmed() && ! \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			self::back( 'mltsa', 'scope_needed' );
+		}
 		$id = Scheduler::start_manual( get_current_user_id() );
-		self::back( 'mltsa', $id ? 'started' : 'refused', $id ? array( 'run' => $id ) : array() );
+		self::back( 'mltsa', $id ? 'started' : self::refusal(), $id ? array( 'run' => $id ) : array() );
 	}
 
 	/**
@@ -173,7 +213,7 @@ class Admin {
 			self::back( 'mltsa-findings', 'recheck_none' );
 		}
 		$id = Scheduler::start_recheck( get_current_user_id(), $urls );
-		self::back( 'mltsa', $id ? 'recheck_started' : 'refused', $id ? array( 'run' => $id ) : array() );
+		self::back( 'mltsa', $id ? 'recheck_started' : self::refusal(), $id ? array( 'run' => $id ) : array() );
 	}
 
 	/**
@@ -220,6 +260,11 @@ class Admin {
 		}
 		if ( isset( $filter['rule_id'] ) ) {
 			$filter['rule_id'] = strtoupper( $filter['rule_id'] );
+		}
+		// Search is sanitised as the findings screen does, and kept when it is "0".
+		$search = isset( $_REQUEST['search'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['search'] ) ) : '';
+		if ( '' !== $search ) {
+			$filter['search'] = $search;
 		}
 		$exporter = new Exporter( $run, $filter );
 		$repo->log_event(
@@ -283,23 +328,21 @@ class Admin {
 		check_admin_referer( 'mltsa_cancel' );
 		$repo = new Repository();
 		$run  = $repo->active_run();
-		if ( $run ) {
-			$repo->update_run(
-				(int) $run['id'],
-				array(
-					'state'        => 'cancelled',
-					'phase'        => 'done',
-					'finished_utc' => Repository::now(),
-				)
-			);
+		// Conditional on the run still being active, so a run that finished
+		// a moment ago keeps its outcome. The worker in turn never writes
+		// over a cancelled run (second review, BUG-5).
+		if ( $run && $repo->cancel_run( (int) $run['id'] ) ) {
 			$repo->log_event( 'run_cancelled', array(), get_current_user_id(), 'run', (int) $run['id'], (int) $run['id'] );
+			self::back( 'mltsa', 'cancelled' );
 		}
-		self::back( 'mltsa', 'cancelled' );
+		self::back( 'mltsa', 'not_cancelled' );
 	}
 
 	/**
 	 * Work on the audit in progress while its screen is open, so a manual
-	 * audit finishes even where cron is slow. Short budget per request.
+	 * audit finishes even where cron is slow. Short budget per request: 8
+	 * seconds, or one full request timeout plus 2 if that is longer, so a
+	 * slow page is read here rather than deferred (branch review R1).
 	 */
 	public static function ajax_step() {
 		if ( ! current_user_can( 'mltsa_audit' ) ) {
@@ -313,6 +356,14 @@ class Admin {
 		}
 		if ( Settings::constant_disabled() ) {
 			wp_send_json_success( array( 'state' => 'disabled' ) );
+		}
+		if ( \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			wp_send_json_success(
+				array(
+					'state'   => 'schema_outdated',
+					'message' => \MLT\SchemaAudit\Installer::upgrade_message(),
+				)
+			);
 		}
 		$worker = new Worker();
 		$status = $worker->process( (int) $run['id'], 8 );

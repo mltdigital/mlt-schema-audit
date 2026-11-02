@@ -168,6 +168,16 @@ class Exporter {
 		foreach ( isset( $summary['coverage'] ) ? (array) $summary['coverage'] : array() as $state => $n ) {
 			$rows[] = array( 'Pages: ' . Labels::of( Labels::COVERAGE, $state ), (int) $n );
 		}
+		foreach ( isset( $summary['resource_checks'] ) ? (array) $summary['resource_checks'] : array() as $key => $n ) {
+			$rows[] = array( 'Images, logos and profile links: ' . Labels::of( Labels::RESOURCE_CHECKS, $key ), (int) $n );
+		}
+		if ( isset( $summary['repeat_unavailable'] ) && is_array( $summary['repeat_unavailable'] ) ) {
+			$repeat = $summary['repeat_unavailable'];
+			$rows[] = array( 'Findings: ' . Labels::REPEAT_UNAVAILABLE['this_run'], isset( $summary['register']['unavailable'] ) ? (int) $summary['register']['unavailable'] : 0 );
+			$rows[] = array( 'Findings: ' . sprintf( Labels::REPEAT_UNAVAILABLE['issues'], (int) $repeat['min_runs'] ), (int) $repeat['issues'] );
+			$rows[] = array( 'Findings: ' . Labels::REPEAT_UNAVAILABLE['longest'], (int) $repeat['longest'] );
+			$rows[] = array( 'Findings: unavailable in a row, issue IDs', implode( ' ', array_map( 'intval', (array) $repeat['ids'] ) ) );
+		}
 		foreach ( isset( $summary['severity'] ) ? (array) $summary['severity'] : array() as $severity => $n ) {
 			$rows[] = array( 'Findings: ' . Labels::of( Labels::SEVERITIES, $severity ), (int) $n );
 		}
@@ -206,7 +216,11 @@ class Exporter {
 	private function findings() {
 		$filter = $this->filter;
 		if ( ! empty( $filter['display'] ) ) {
+			// As on the findings screen: a group with no rules matches nothing, not everything.
 			$filter['rule_ids'] = self::rules_in_display( $filter['display'] );
+			if ( empty( $filter['rule_ids'] ) ) {
+				$filter['rule_ids'] = array( '-' );
+			}
 		}
 		$findings = $this->repo->findings( (int) $this->run['id'], $filter, 0 );
 		$notes    = Issues::latest_notes( array_filter( array_column( $findings, 'issue_id' ) ) );

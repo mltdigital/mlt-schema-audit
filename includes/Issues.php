@@ -156,13 +156,9 @@ class Issues {
 	public static function latest_notes( array $issue_ids ) {
 		$repo = new Repository();
 		$out  = array();
-		foreach ( array_unique( array_map( 'intval', $issue_ids ) ) as $id ) {
-			foreach ( $repo->events_for( 'issue', $id ) as $event ) {
-				if ( 'note' === $event['event_type'] ) {
-					$data       = Repository::decode( $event['data'] );
-					$out[ $id ] = isset( $data['text'] ) ? (string) $data['text'] : '';
-				}
-			}
+		foreach ( $repo->latest_events_for( 'issue', 'note', $issue_ids ) as $id => $event ) {
+			$data       = Repository::decode( $event['data'] );
+			$out[ $id ] = isset( $data['text'] ) ? (string) $data['text'] : '';
 		}
 		return $out;
 	}

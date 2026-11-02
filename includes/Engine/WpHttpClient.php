@@ -23,6 +23,25 @@ class WpHttpClient implements HttpClient {
 	public $last_pin = '';
 
 	/**
+	 * Whether the site's own host may be on a loopback or private address
+	 * (MLTSA_ALLOW_PRIVATE_SELF, local development only), as UrlPolicy is told.
+	 *
+	 * @var bool
+	 */
+	private $allow_private_self;
+
+	/**
+	 * Constructor.
+	 *
+	 * @param bool|null $allow_private_self Null reads MLTSA_ALLOW_PRIVATE_SELF.
+	 */
+	public function __construct( $allow_private_self = null ) {
+		$this->allow_private_self = null === $allow_private_self
+			? ( defined( 'MLTSA_ALLOW_PRIVATE_SELF' ) && MLTSA_ALLOW_PRIVATE_SELF )
+			: (bool) $allow_private_self;
+	}
+
+	/**
 	 * {@inheritDoc}
 	 *
 	 * @param string $url       Absolute URL.
@@ -65,13 +84,35 @@ class WpHttpClient implements HttpClient {
 		};
 		add_action( 'http_api_curl', $pinner, PHP_INT_MAX );
 
+		// WordPress checks the URL again (wp_http_validate_url) and exempts
+		// only the home host itself from its private-address and port rules,
+		// so it refused the www or bare variant that UrlPolicy allows. Give
+		// that variant the same exemption, only where a private own host is
+		// allowed and only while the connection is pinned to a loopback or
+		// private address (never link-local or metadata).
+		$variant  = $this->private_variant( $host, $pinned_ip );
+		$home     = wp_parse_url( (string) get_option( 'home' ) );
+		$external = static function ( $is_external, $checked ) use ( $variant ) {
+			return $is_external || ( '' !== $variant && strtolower( (string) $checked ) === $variant );
+		};
+		$ports    = static function ( $allowed, $checked ) use ( $variant, $home ) {
+			if ( '' !== $variant && strtolower( (string) $checked ) === $variant && isset( $home['port'] ) && is_array( $allowed ) ) {
+				$allowed[] = (int) $home['port'];
+			}
+			return $allowed;
+		};
+		add_filter( 'http_request_host_is_external', $external, PHP_INT_MAX, 2 );
+		add_filter( 'http_allowed_safe_ports', $ports, PHP_INT_MAX, 2 );
+
 		$response = wp_safe_remote_get(
 			$url,
 			array(
 				'method'              => isset( $args['method'] ) ? $args['method'] : 'GET',
 				'timeout'             => (int) $args['timeout'],
 				'redirection'         => 0,
-				'limit_response_size' => (int) $args['max_bytes'],
+				// One byte over the cap, so a page of exactly the cap is
+				// told apart from a longer one that was cut.
+				'limit_response_size' => (int) $args['max_bytes'] + 1,
 				'user-agent'          => (string) $args['user_agent'],
 				'cookies'             => array(),
 				'headers'             => array( 'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.5' ),
@@ -83,6 +124,8 @@ class WpHttpClient implements HttpClient {
 		);
 
 		remove_action( 'http_api_curl', $pinner, PHP_INT_MAX );
+		remove_filter( 'http_request_host_is_external', $external, PHP_INT_MAX );
+		remove_filter( 'http_allowed_safe_ports', $ports, PHP_INT_MAX );
 		$result['pinned'] = $applied;
 
 		if ( is_wp_error( $response ) ) {
@@ -108,12 +151,43 @@ class WpHttpClient implements HttpClient {
 			$headers[ strtolower( (string) $name ) ] = is_array( $value ) ? implode( ', ', $value ) : (string) $value;
 		}
 		$body = (string) wp_remote_retrieve_body( $response );
+		$cap  = (int) $args['max_bytes'];
 
-		$result['status']    = (int) wp_remote_retrieve_response_code( $response );
-		$result['headers']   = $headers;
-		$result['body']      = $body;
-		$result['truncated'] = strlen( $body ) >= (int) $args['max_bytes']
-			|| ( isset( $headers['content-length'] ) && (int) $headers['content-length'] > (int) $args['max_bytes'] );
+		$result['status']  = (int) wp_remote_retrieve_response_code( $response );
+		$result['headers'] = $headers;
+		// A HEAD response has no body: its Content-Length is the file's size,
+		// not bytes received, so it never makes the response "too large"
+		// (branch review R3). The cap applies to GET bodies.
+		$is_head             = isset( $args['method'] ) && 'HEAD' === strtoupper( (string) $args['method'] );
+		$result['truncated'] = strlen( $body ) > $cap
+			|| ( ! $is_head && isset( $headers['content-length'] ) && (int) $headers['content-length'] > $cap );
+		$result['body']      = strlen( $body ) > $cap ? substr( $body, 0, $cap ) : $body;
 		return $result;
+	}
+
+	/**
+	 * The host, when it is the www or bare variant of a home host that may
+	 * be private and the connection is pinned to a loopback or private
+	 * address; otherwise ''.
+	 *
+	 * @param string $host      Requested host.
+	 * @param string $pinned_ip Address the connection will use.
+	 * @return string
+	 */
+	private function private_variant( $host, $pinned_ip ) {
+		if ( ! $this->allow_private_self ) {
+			return '';
+		}
+		$class = UrlPolicy::classify_ip( $pinned_ip );
+		if ( 'loopback' !== $class && 'private' !== $class ) {
+			return '';
+		}
+		$home   = (string) get_option( 'home' );
+		$policy = new UrlPolicy( $home, true );
+		$host   = strtolower( (string) $host );
+		if ( $host === $policy->home_host() || ! $policy->is_own_host( $host ) ) {
+			return '';
+		}
+		return $host;
 	}
 }

@@ -24,6 +24,34 @@ class Evaluator {
 	const SNIPPET_CHARS = 500;
 
 	/**
+	 * Properties that may legitimately carry several values, so definitions
+	 * of one @id split over blocks are combined rather than first-wins.
+	 *
+	 * @var array
+	 */
+	const MULTI_VALUED = array(
+		'sameAs',
+		'telephone',
+		'email',
+		'address',
+		'contactPoint',
+		'identifier',
+		'areaServed',
+		'knowsAbout',
+		'openingHoursSpecification',
+		'department',
+		'subOrganization',
+		'hasOfferCatalog',
+		'makesOffer',
+		'review',
+		'image',
+		'award',
+		'hasCredential',
+		'memberOf',
+		'additionalType',
+	);
+
+	/**
 	 * Hosts that are never live (URL-001).
 	 *
 	 * @var array
@@ -80,7 +108,7 @@ class Evaluator {
 	/**
 	 * Constructor.
 	 *
-	 * @param array $context { page_url, own_hosts, home_scheme, staging_patterns (extra regexes),
+	 * @param array $context { page_url, own_hosts, home_scheme, staging_patterns (extra hosts),
 	 *                         approved_phones (NSNs), approved_names }.
 	 */
 	public function __construct( array $context ) {
@@ -336,7 +364,7 @@ class Evaluator {
 						continue;
 					}
 					if ( ! empty( $approved ) && ! in_array( $nsn, $approved, true ) ) {
-						$this->add( 'FACT-006', 'review', 'high', $base + array( 'comparison' => 'Approved: ' . implode( ', ', (array) $this->ctx['approved_phones'] ) ) );
+						$this->add( 'FACT-006', 'review', 'high', $base + array( 'comparison' => 'Approved: ' . implode( ', ', array_map( array( __CLASS__, 'display_nsn' ), $approved ) ) ) );
 					}
 					if ( ! $this->facts->has_phone( $phone ) && ! in_array( $nsn, $approved, true ) ) {
 						$this->add(
@@ -441,12 +469,37 @@ class Evaluator {
 	}
 
 	/**
+	 * Built-in staging patterns plus the staff-entered extra hosts.
+	 *
+	 * Extra entries are stored as plain hosts (Settings::sanitise keeps letters, digits, dots and
+	 * hyphens), so each is quoted and anchored to the whole host. Like the built-in suffix patterns,
+	 * a host also covers its subdomains. Returns pattern => label for the evidence text.
+	 *
+	 * @param array $extra Staff-entered hosts.
+	 * @return array
+	 */
+	private static function staging_patterns( array $extra ) {
+		$out = array();
+		foreach ( self::STAGING_PATTERNS as $pattern ) {
+			$out[ $pattern ] = $pattern;
+		}
+		foreach ( $extra as $entry ) {
+			$host = trim( strtolower( (string) $entry ), ". \t\n\r" );
+			if ( '' === $host ) {
+				continue;
+			}
+			$out[ '/(^|\\.)' . preg_quote( $host, '/' ) . '$/' ] = 'the extra staging host ' . $host;
+		}
+		return $out;
+	}
+
+	/**
 	 * URLs and resources.
 	 *
 	 * @param string $canonical Canonical link href.
 	 */
 	private function url_rules( $canonical ) {
-		$patterns = array_merge( self::STAGING_PATTERNS, (array) $this->ctx['staging_patterns'] );
+		$patterns = self::staging_patterns( (array) $this->ctx['staging_patterns'] );
 		$seen     = array();
 		foreach ( $this->blocks as $block ) {
 			if ( ! is_array( $block['data'] ) || 'ok' !== $block['parse'] ) {
@@ -470,10 +523,10 @@ class Evaluator {
 						$this->add( 'URL-001', 'fail', 'high', $base + array( 'comparison' => 'The path names this site and continues into wp-content, so it is a copy of this site on another server.' ) );
 					}
 					if ( ! $this->is_own_host( $host ) && ! isset( $seen[ 'stg|' . $value ] ) ) {
-						foreach ( $patterns as $pattern ) {
-							if ( @preg_match( $pattern, $host ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Staff-entered patterns are validated on save; a bad one must not stop the run.
+						foreach ( $patterns as $pattern => $label ) {
+							if ( preg_match( $pattern, $host ) ) {
 								$seen[ 'stg|' . $value ] = true;
-								$this->add( 'URL-001', 'fail', 'high', $base + array( 'comparison' => 'Matches ' . $pattern ) );
+								$this->add( 'URL-001', 'fail', 'high', $base + array( 'comparison' => 'Matches ' . $label ) );
 								break;
 							}
 						}
@@ -1632,16 +1685,17 @@ class Evaluator {
 	}
 
 	/**
-	 * Facts kept per page for site-wide rules: business entities by @id and
-	 * own-host resources cited as images or logos.
+	 * Facts kept per page for site-wide rules: business entities by @id,
+	 * own-host resources cited as images or logos, and own-host sameAs links.
 	 *
 	 * @return array
 	 */
 	private function site_facts() {
-		$entities  = array();
-		$resources = array();
-		$ids       = array();
-		$named     = array();
+		$entities      = array();
+		$resources     = array();
+		$profile_links = array();
+		$ids           = array();
+		$named         = array();
 		foreach ( $this->graph->nodes as $node ) {
 			if ( $node['is_ref'] ) {
 				continue;
@@ -1681,7 +1735,9 @@ class Evaluator {
 					}
 				}
 			}
-			foreach ( array( 'image', 'logo', 'contentUrl', 'thumbnailUrl', 'sameAs' ) as $prop ) {
+			// Files (URL-004): a broken image or file. An own-host sameAs link
+			// is a page, so it is kept apart and checked as a page (URL-008).
+			foreach ( array( 'image', 'logo', 'contentUrl', 'thumbnailUrl' ) as $prop ) {
 				if ( ! isset( $node['props'][ $prop ] ) ) {
 					continue;
 				}
@@ -1698,13 +1754,29 @@ class Evaluator {
 					}
 				}
 			}
+			// Own-host sameAs links only: other hosts are never requested.
+			if ( isset( $node['props']['sameAs'] ) ) {
+				$values = Graph::is_list( $node['props']['sameAs'] ) ? $node['props']['sameAs'] : array( $node['props']['sameAs'] );
+				foreach ( $values as $value ) {
+					$url  = is_string( $value ) ? trim( $value ) : '';
+					$host = strtolower( (string) parse_url( $url, PHP_URL_HOST ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+					if ( '' !== $url && $this->is_own_host( $host ) && ! isset( $profile_links[ $url ] ) ) {
+						$profile_links[ $url ] = array(
+							'prop'  => 'sameAs',
+							'path'  => $node['path'] . "['sameAs']",
+							'block' => $node['block'],
+						);
+					}
+				}
+			}
 		}
 		return array(
-			'entities'  => $entities,
-			'resources' => $resources,
-			'ids'       => array_keys( $ids ),
-			'refs'      => $this->refs,
-			'named'     => $named,
+			'entities'      => $entities,
+			'resources'     => $resources,
+			'profile_links' => $profile_links,
+			'ids'           => array_keys( $ids ),
+			'refs'          => $this->refs,
+			'named'         => $named,
 		);
 	}
 
@@ -1769,17 +1841,53 @@ class Evaluator {
 	/**
 	 * Properties of a node merged with every definition sharing its @id.
 	 *
+	 * A single-valued property takes the node's own value, then the first
+	 * definition that has one. A multi-valued property (see MULTI_VALUED) is
+	 * combined across every definition, without repeats, so values split over
+	 * two blocks (sameAs, telephone, address) are all seen.
+	 *
 	 * @param array $node Node.
 	 * @return array
 	 */
 	private function merged_props( array $node ) {
 		$props = $node['props'];
-		if ( '' !== $node['id'] ) {
-			foreach ( $this->graph->definitions( $node['id'] ) as $def ) {
-				$props = $props + $def['props'];
+		if ( '' === $node['id'] ) {
+			return $props;
+		}
+		foreach ( $this->graph->definitions( $node['id'] ) as $def ) {
+			foreach ( $def['props'] as $prop => $value ) {
+				if ( ! array_key_exists( $prop, $props ) ) {
+					$props[ $prop ] = $value;
+				} elseif ( in_array( $prop, self::MULTI_VALUED, true ) ) {
+					$props[ $prop ] = self::combine_values( $props[ $prop ], $value );
+				}
 			}
 		}
 		return $props;
+	}
+
+	/**
+	 * Two values of a multi-valued property as one: the first's values, then
+	 * any of the second's not already there. One distinct value stays as it
+	 * was written; more become a list.
+	 *
+	 * @param mixed $first  Value.
+	 * @param mixed $second Value.
+	 * @return mixed
+	 */
+	private static function combine_values( $first, $second ) {
+		$out  = array();
+		$seen = array();
+		foreach ( array( $first, $second ) as $value ) {
+			foreach ( is_array( $value ) && Graph::is_list( $value ) ? $value : array( $value ) as $item ) {
+				$hash = Extractor::canonical_json( $item );
+				if ( ! isset( $seen[ $hash ] ) ) {
+					$seen[ $hash ] = true;
+					$out[]         = $item;
+				}
+			}
+		}
+		return 1 === count( $out ) ? $out[0] : $out;
 	}
 
 	/**

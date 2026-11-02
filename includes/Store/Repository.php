@@ -131,6 +131,80 @@ class Repository {
 	}
 
 	/**
+	 * Update a run only while it is still in the given state, in one
+	 * statement, so a cancel saved while a worker was part way through a
+	 * step is never written over.
+	 *
+	 * @param int    $id     Run ID.
+	 * @param string $state  State the run must be in.
+	 * @param array  $fields Fields.
+	 * @return bool Whether a row was changed (reliable when $fields changes the state).
+	 */
+	public function update_run_in_state( $id, $state, array $fields ) {
+		global $wpdb;
+		$changed = $wpdb->update(
+			$this->t( 'runs' ),
+			$fields,
+			array(
+				'id'    => (int) $id,
+				'state' => (string) $state,
+			)
+		);
+		return false !== $changed && $changed > 0;
+	}
+
+	/**
+	 * Cancel a run that is still queued or running. A run that finished
+	 * meanwhile keeps its outcome, and so does one that has already written
+	 * its results to the issue register (phase notify): cancelling it then
+	 * would leave the register changed by a cancelled run (branch review R4).
+	 *
+	 * @param int $id Run ID.
+	 * @return bool Whether the run was cancelled.
+	 */
+	public function cancel_run( $id ) {
+		global $wpdb;
+		$changed = $wpdb->query( $wpdb->prepare( "UPDATE {$this->t( 'runs' )} SET state = 'cancelled', phase = 'done', finished_utc = %s WHERE id = %d AND state IN ('queued','running') AND phase <> 'notify'", self::now(), (int) $id ) );
+		return false !== $changed && $changed > 0;
+	}
+
+	/**
+	 * Start a transaction (InnoDB on MySQL and MariaDB; SQLite on the
+	 * development site). MyISAM tables ignore it.
+	 */
+	public function begin() {
+		global $wpdb;
+		$wpdb->query( 'START TRANSACTION' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups one step's writes.
+	}
+
+	/**
+	 * Commit the transaction begin() started.
+	 */
+	public function commit() {
+		global $wpdb;
+		$wpdb->query( 'COMMIT' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups one step's writes.
+	}
+
+	/**
+	 * Undo the transaction begin() started.
+	 */
+	public function rollback() {
+		global $wpdb;
+		$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups one step's writes.
+	}
+
+	/**
+	 * A run's state, read fresh.
+	 *
+	 * @param int $id Run ID.
+	 * @return string Empty when the run does not exist.
+	 */
+	public function run_state( $id ) {
+		global $wpdb;
+		return (string) $wpdb->get_var( $wpdb->prepare( "SELECT state FROM {$this->t( 'runs' )} WHERE id = %d", (int) $id ) );
+	}
+
+	/**
 	 * The run in progress, if any (oldest first).
 	 *
 	 * @return array|null
@@ -208,6 +282,19 @@ class Repository {
 		return $row ? $row : null;
 	}
 
+	/**
+	 * Summary of the most recent run before this one that finished its
+	 * comparison (complete, partial or failed), of any type.
+	 *
+	 * @param int $run_id Run ID.
+	 * @return array
+	 */
+	public function previous_finished_summary( $run_id ) {
+		global $wpdb;
+		$summary = $wpdb->get_var( $wpdb->prepare( "SELECT summary FROM {$this->t( 'runs' )} WHERE id < %d AND state IN ('complete','partial','failed') ORDER BY id DESC LIMIT 1", (int) $run_id ) );
+		return self::decode( (string) $summary );
+	}
+
 	/* -------------------------------------------------------------- Run URLs */
 
 	/**
@@ -228,6 +315,39 @@ class Repository {
 		);
 		$wpdb->insert( $this->t( 'run_urls' ), $fields );
 		return (int) $wpdb->insert_id;
+	}
+
+	/**
+	 * Save a run's frozen URL list, replacing any rows an earlier attempt
+	 * left behind. Discovery saves the list in its last step and then moves
+	 * the run to the fetch phase; a worker killed in between left the rows
+	 * saved and the run still in discovery, so the next attempt added every
+	 * URL again. One transaction where the database supports it, so a kill
+	 * part way through leaves no partial list either.
+	 *
+	 * @param int   $run_id Run ID.
+	 * @param array $rows   Field arrays for insert_run_url(), without run_id.
+	 */
+	public function replace_run_urls( $run_id, array $rows ) {
+		global $wpdb;
+		$wpdb->query( 'START TRANSACTION' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups the list into one write.
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$this->t( 'run_urls' )} WHERE run_id = %d", (int) $run_id ) );
+		foreach ( $rows as $fields ) {
+			$this->insert_run_url( array( 'run_id' => (int) $run_id ) + $fields );
+		}
+		$wpdb->query( 'COMMIT' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups the list into one write.
+	}
+
+	/**
+	 * The WordPress post an earlier run listed at this address, or 0 when no
+	 * run listed it as a post (a sitemap-only URL, or history pruned).
+	 *
+	 * @param string $key URL key (Evaluator::url_key()).
+	 * @return int Post ID.
+	 */
+	public function last_post_id_for( $key ) {
+		global $wpdb;
+		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM {$this->t( 'run_urls' )} WHERE url_key = %s AND post_id > 0 ORDER BY id DESC LIMIT 1", sha1( (string) $key ) ) );
 	}
 
 	/**
@@ -521,7 +641,7 @@ class Repository {
 			$where[] = 'o.rule_id IN (' . implode( ',', array_fill( 0, count( $filter['rule_ids'] ), '%s' ) ) . ')';
 			$args    = array_merge( $args, array_values( $filter['rule_ids'] ) );
 		}
-		if ( ! empty( $filter['search'] ) ) {
+		if ( isset( $filter['search'] ) && '' !== (string) $filter['search'] ) {
 			$where[] = '(u.url LIKE %s OR u.title LIKE %s OR o.observed LIKE %s)';
 			$like    = '%' . $wpdb->esc_like( (string) $filter['search'] ) . '%';
 			$args[]  = $like;
@@ -568,7 +688,13 @@ class Repository {
 	 */
 	public function insert_issue( array $fields ) {
 		global $wpdb;
-		$fields = array_merge( array( 'exception_reason' => '' ), $fields );
+		$fields = array_merge(
+			array(
+				'exception_reason' => '',
+				'evidence'         => '',
+			),
+			$fields
+		);
 		$wpdb->insert( $this->t( 'issues' ), $fields );
 		return (int) $wpdb->insert_id;
 	}
@@ -599,6 +725,89 @@ class Repository {
 		}
 		$in = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
 		return (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$this->t( 'issues' )} WHERE id IN ($in)", $ids ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $in is a list of %d placeholders.
+	}
+
+	/**
+	 * The issue register across runs: current issue state with the latest evidence.
+	 *
+	 * @param array $filter { work_status, verification_state, owner (user ID, or -1 for nobody), search }.
+	 * @param int   $limit  Limit (0 for all).
+	 * @param int   $offset Offset.
+	 * @return array
+	 */
+	public function register( array $filter = array(), $limit = 50, $offset = 0 ) {
+		global $wpdb;
+		list( $where, $args ) = $this->register_where( $filter );
+		$sql                  = "SELECT i.*, o.observed AS latest_observed FROM {$this->t( 'issues' )} i
+			LEFT JOIN {$this->t( 'occurrences' )} o ON o.id = i.latest_occurrence_id
+			WHERE $where ORDER BY i.last_observed_utc DESC, i.id DESC";
+		if ( $limit > 0 ) {
+			$sql   .= ' LIMIT %d OFFSET %d';
+			$args[] = (int) $limit;
+			$args[] = (int) $offset;
+		}
+		return (array) $wpdb->get_results( $wpdb->prepare( $sql, $args ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Built from fixed clauses with placeholders.
+	}
+
+	/**
+	 * Number of issues matching a register filter.
+	 *
+	 * @param array $filter Filter.
+	 * @return int
+	 */
+	public function count_register( array $filter = array() ) {
+		global $wpdb;
+		list( $where, $args ) = $this->register_where( $filter );
+		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$this->t( 'issues' )} i WHERE $where", $args ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- Built from fixed clauses with placeholders.
+	}
+
+	/**
+	 * Owners that hold at least one issue, for the register's owner filter.
+	 *
+	 * @return array User IDs.
+	 */
+	public function register_owner_ids() {
+		global $wpdb;
+		return array_map( 'intval', (array) $wpdb->get_col( "SELECT DISTINCT owner_user_id FROM {$this->t( 'issues' )} WHERE owner_user_id > 0 ORDER BY owner_user_id" ) );
+	}
+
+	/**
+	 * WHERE clause for the register: fixed fragments with placeholders only.
+	 *
+	 * @param array $filter Filter.
+	 * @return array [ sql, args ]
+	 */
+	private function register_where( array $filter ) {
+		global $wpdb;
+		$where = array( 'i.id > %d' ); // Always a placeholder, so prepare() is happy with no filter.
+		$args  = array( 0 );
+		$map   = array(
+			'work_status'        => 'i.work_status = %s',
+			'verification_state' => 'i.verification_state = %s',
+		);
+		foreach ( $map as $key => $clause ) {
+			if ( ! empty( $filter[ $key ] ) ) {
+				$where[] = $clause;
+				$args[]  = (string) $filter[ $key ];
+			}
+		}
+		if ( isset( $filter['owner'] ) && '' !== (string) $filter['owner'] ) {
+			$owner = (int) $filter['owner'];
+			if ( $owner < 0 ) {
+				$where[] = 'i.owner_user_id = 0';
+			} elseif ( $owner > 0 ) {
+				$where[] = 'i.owner_user_id = %d';
+				$args[]  = $owner;
+			}
+		}
+		if ( isset( $filter['search'] ) && '' !== (string) $filter['search'] ) {
+			$where[] = '(i.page_url LIKE %s OR i.rule_id LIKE %s OR i.entity_key LIKE %s)';
+			$like    = '%' . $wpdb->esc_like( (string) $filter['search'] ) . '%';
+			$args[]  = $like;
+			$args[]  = $like;
+			$args[]  = $like;
+		}
+		return array( implode( ' AND ', $where ), $args );
 	}
 
 	/**
@@ -660,6 +869,34 @@ class Repository {
 	public function events_for( $object_type, $object_id ) {
 		global $wpdb;
 		return (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$this->t( 'events' )} WHERE object_type = %s AND object_id = %d ORDER BY id ASC", $object_type, (int) $object_id ), ARRAY_A );
+	}
+
+	/**
+	 * The latest event of one type on each of several objects, in as few queries as possible.
+	 *
+	 * Large sets are read in chunks so one statement never carries thousands of placeholders.
+	 *
+	 * @param string $object_type Type.
+	 * @param string $event_type  Event type.
+	 * @param array  $object_ids  IDs.
+	 * @return array object_id => event row (object_id, data)
+	 */
+	public function latest_events_for( $object_type, $event_type, array $object_ids ) {
+		global $wpdb;
+		$out = array();
+		$ids = array_values( array_unique( array_map( 'intval', $object_ids ) ) );
+		foreach ( array_chunk( $ids, 500 ) as $chunk ) {
+			$in   = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
+			$args = array_merge( array( (string) $object_type, (string) $event_type ), $chunk );
+			$rows = (array) $wpdb->get_results(
+				$wpdb->prepare( "SELECT e.object_id, e.data FROM {$this->t( 'events' )} e INNER JOIN ( SELECT MAX(id) AS last_id FROM {$this->t( 'events' )} WHERE object_type = %s AND event_type = %s AND object_id IN ($in) GROUP BY object_id ) l ON e.id = l.last_id", $args ), // phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $in is a list of %d placeholders.
+				ARRAY_A
+			);
+			foreach ( $rows as $row ) {
+				$out[ (int) $row['object_id'] ] = $row;
+			}
+		}
+		return $out;
 	}
 
 	/**
@@ -737,6 +974,32 @@ class Repository {
 		$in   = implode( ',', array_fill( 0, count( $states ), '%s' ) );
 		$args = array_merge( array_values( $states ), array( (int) $limit ) );
 		return (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$this->t( 'outbox' )} WHERE state IN ($in) ORDER BY id ASC LIMIT %d", $args ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $in is a list of %s placeholders.
+	}
+
+	/**
+	 * Pending outbox rows that are due now, earliest first, so rows waiting
+	 * for a retry never crowd due rows out of the limit (finding 5).
+	 *
+	 * @param int $now   Unix time.
+	 * @param int $limit Limit.
+	 * @return array
+	 */
+	public function outbox_due( $now, $limit = 20 ) {
+		global $wpdb;
+		return (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$this->t( 'outbox' )} WHERE state = 'pending' AND not_before <= %d ORDER BY not_before ASC, id ASC LIMIT %d", (int) $now, (int) $limit ), ARRAY_A );
+	}
+
+	/**
+	 * When the outbox next has work: the earliest pending not_before, or the
+	 * moment the earliest sending claim expires (so an interrupted send is
+	 * marked delivery_unknown). Null when there is nothing to do.
+	 *
+	 * @return int|null Unix time.
+	 */
+	public function outbox_next_due() {
+		global $wpdb;
+		$next = $wpdb->get_var( "SELECT MIN(t) FROM ( SELECT MIN(not_before) AS t FROM {$this->t( 'outbox' )} WHERE state = 'pending' UNION ALL SELECT MIN(claimed_until) + 1 AS t FROM {$this->t( 'outbox' )} WHERE state = 'sending' ) AS due" );
+		return null === $next ? null : (int) $next;
 	}
 
 	/**

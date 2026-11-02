@@ -40,6 +40,11 @@ class Scheduler {
 	const OUTBOX_HOOK = 'mltsa_outbox';
 
 	/**
+	 * Hourly check that an active run still has a worker event queued.
+	 */
+	const WATCHDOG_HOOK = 'mltsa_watchdog';
+
+	/**
 	 * Option used as a start mutex (add_option is an atomic insert).
 	 */
 	const START_LOCK = 'mltsa_lock_start';
@@ -51,6 +56,7 @@ class Scheduler {
 		add_action( self::START_HOOK, array( __CLASS__, 'on_start' ), 10, 1 );
 		add_action( self::WORKER_HOOK, array( __CLASS__, 'on_worker' ) );
 		add_action( self::OUTBOX_HOOK, array( Outbox::class, 'process' ) );
+		add_action( self::WATCHDOG_HOOK, array( __CLASS__, 'on_watchdog' ) );
 	}
 
 	/**
@@ -58,6 +64,35 @@ class Scheduler {
 	 */
 	public static function reschedule_after_activation() {
 		self::sync();
+		self::ensure_watchdog();
+	}
+
+	/**
+	 * Keep exactly one hourly watchdog event queued.
+	 */
+	public static function ensure_watchdog() {
+		if ( ! wp_next_scheduled( self::WATCHDOG_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', self::WATCHDOG_HOOK );
+		}
+	}
+
+	/**
+	 * Watchdog: an active run with no worker event queued (a lost event, a
+	 * killed tick before 0.1.1) gets one now, so it cannot stay stranded
+	 * for longer than an hour (finding 4). It also runs the catch-up check,
+	 * so a monthly audit refused while the database upgrade was pending
+	 * starts once the upgrade completes, on plain WordPress cron too, where
+	 * no worker event runs without an active run (branch review S3).
+	 */
+	public static function on_watchdog() {
+		self::catch_up();
+		$repo = new Repository();
+		$run  = $repo->active_run();
+		if ( $run && ! wp_next_scheduled( self::WORKER_HOOK ) ) {
+			$repo->log_event( 'worker_restarted', array( 'by' => 'watchdog' ), 0, 'run', (int) $run['id'], (int) $run['id'] );
+			self::kick_worker( 0 );
+		}
+		Outbox::schedule_next();
 	}
 
 	/**
@@ -212,7 +247,7 @@ class Scheduler {
 	 * @return int
 	 */
 	private static function start( array $fields, $user_id ) {
-		if ( Settings::constant_disabled() ) {
+		if ( Settings::constant_disabled() || \MLT\SchemaAudit\Installer::upgrade_pending() ) {
 			return 0;
 		}
 		if ( ! add_option( self::START_LOCK, time(), '', 'no' ) ) {
@@ -273,8 +308,26 @@ class Scheduler {
 	}
 
 	/**
+	 * Replace any queued worker event with one $delay seconds from now.
+	 *
+	 * @param int $delay Seconds from now.
+	 */
+	public static function continue_worker( $delay ) {
+		self::clear_worker();
+		wp_schedule_single_event( time() + (int) $delay, self::WORKER_HOOK );
+	}
+
+	/**
+	 * Remove every queued worker event.
+	 */
+	public static function clear_worker() {
+		wp_clear_scheduled_hook( self::WORKER_HOOK );
+	}
+
+	/**
 	 * Worker event fired by WordPress cron: a short budget, well inside the
-	 * PHP time limit of a web request.
+	 * PHP time limit of a web request. The worker raises it to fit one
+	 * request with the full timeout (Worker::slice_budget()).
 	 */
 	public static function on_worker() {
 		$limit  = (int) ini_get( 'max_execution_time' );
