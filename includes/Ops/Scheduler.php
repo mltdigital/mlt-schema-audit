@@ -79,9 +79,13 @@ class Scheduler {
 	/**
 	 * Watchdog: an active run with no worker event queued (a lost event, a
 	 * killed tick before 0.1.1) gets one now, so it cannot stay stranded
-	 * for longer than an hour (finding 4).
+	 * for longer than an hour (finding 4). It also runs the catch-up check,
+	 * so a monthly audit refused while the database upgrade was pending
+	 * starts once the upgrade completes, on plain WordPress cron too, where
+	 * no worker event runs without an active run (branch review S3).
 	 */
 	public static function on_watchdog() {
+		self::catch_up();
 		$repo = new Repository();
 		$run  = $repo->active_run();
 		if ( $run && ! wp_next_scheduled( self::WORKER_HOOK ) ) {

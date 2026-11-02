@@ -919,6 +919,37 @@ itest(
 );
 
 itest(
+	'Branch review S3: a monthly audit refused while the upgrade was pending starts from the hourly watchdog once it completes',
+	static function () {
+		$repo = new Repository();
+		finish_active_runs();
+		reset_settings( array( 'monitoring' => true ) );
+		$s        = Settings::all();
+		$previous = Calendar::previous( $s, time() );
+		update_option( 'mltsa_monitoring_since', $previous - 86400, false );
+		$key      = Calendar::schedule_key( $previous, $s['schedule_timezone'] );
+		$existing = $repo->run_by_schedule_key( $key );
+		if ( $existing ) {
+			global $wpdb;
+			$wpdb->update( $wpdb->prefix . 'mltsa_runs', array( 'schedule_key' => null ), array( 'id' => (int) $existing['id'] ) );
+		}
+		$saved = get_option( 'mltsa_db_version' );
+		update_option( 'mltsa_db_version', '1', false );
+		try {
+			icheck( 0 === Scheduler::start_monthly( $previous, false ), 'Refused while the upgrade is pending' );
+		} finally {
+			update_option( 'mltsa_db_version', $saved, false );
+		}
+		icheck( ! $repo->run_by_schedule_key( $key ), 'No run yet' );
+		Scheduler::on_watchdog();
+		$run = $repo->run_by_schedule_key( $key );
+		icheck( $run && 'monthly' === $run['run_type'], 'The watchdog started the missed month as a catch-up' );
+		finish_active_runs();
+		Scheduler::clear_worker();
+	}
+);
+
+itest(
 	'Owner decision 2026-11-02: an own-host sameAs link is checked as a page (URL-008), an image as a file (URL-004)',
 	static function () use ( $admin ) {
 		finish_active_runs();
