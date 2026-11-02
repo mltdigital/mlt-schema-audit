@@ -16,6 +16,7 @@
 
 use MLT\SchemaAudit\Engine\Evaluator;
 use MLT\SchemaAudit\Engine\Extractor;
+use MLT\SchemaAudit\Engine\Rules;
 use MLT\SchemaAudit\Engine\SiteRules;
 
 /**
@@ -191,6 +192,45 @@ mltsa_test(
 		sort( $ids );
 		sort( $expected );
 		check_same( $expected, $ids, 'Fixture IDs' );
+	}
+);
+
+mltsa_test(
+	'Review reply: a broken own-host sameAs link is not reported as a broken image; a broken own-host logo still is',
+	static function () {
+		$site = 'https://www.firm-sameas.example';
+		$fx   = array(
+			'site'      => $site,
+			'pages'     => array(
+				array(
+					'path'   => '/',
+					'body'   => '<p>Firm</p>',
+					'blocks' => array(
+						array(
+							'@context' => 'https://schema.org',
+							'@type'    => 'LegalService',
+							'@id'      => $site . '/#org',
+							'name'     => 'Firm',
+							'logo'     => $site . '/wp-content/uploads/logo.png',
+							'sameAs'   => array( $site . '/about-us/', 'https://firm-sameas.example/team/' ),
+						),
+					),
+				),
+			),
+			'resources' => array(
+				$site . '/wp-content/uploads/logo.png' => 404,
+				$site . '/about-us/'                   => 404,
+				'https://firm-sameas.example/team/'    => 410,
+			),
+		);
+		$broken = array();
+		foreach ( run_fixture( $fx )['findings'] as $f ) {
+			if ( 'URL-004' === $f['rule_id'] ) {
+				$broken[] = $f['property'] . ' ' . $f['observed'];
+			}
+		}
+		check_same( array( 'logo ' . $site . '/wp-content/uploads/logo.png' ), $broken, 'Only the logo is a broken file' );
+		check_same( 3, Rules::get( 'URL-004' )['version'], 'URL-004 version bumped, so open sameAs issues are held as a rule change, not cleared as fixed' );
 	}
 );
 

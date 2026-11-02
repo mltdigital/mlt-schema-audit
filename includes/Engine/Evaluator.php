@@ -1734,7 +1734,9 @@ class Evaluator {
 					}
 				}
 			}
-			foreach ( array( 'image', 'logo', 'contentUrl', 'thumbnailUrl', 'sameAs' ) as $prop ) {
+			// Files only: URL-004 reports a broken image or file. An own-host
+			// sameAs link is a page, not a file, so it is not checked here.
+			foreach ( array( 'image', 'logo', 'contentUrl', 'thumbnailUrl' ) as $prop ) {
 				if ( ! isset( $node['props'][ $prop ] ) ) {
 					continue;
 				}

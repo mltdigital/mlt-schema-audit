@@ -51,7 +51,7 @@ Common cases from the pilot:
 | FACT-001 Telephone not found on the page | The schema number is not shown or linked on the page. It may be a typo, or a real unpublished line: ask the client before calling it an error |
 | FACT-007 Postcode contradicted by the page | The page prints the same street with a different postcode. Very likely wrong |
 | ID-005, SITE-002 Same business declared more than once | Several unlinked descriptions of one firm, often from two plugins |
-| URL-004 Linked file or page returns not found | A logo, image or profile page on this site returns 404 |
+| URL-004 Linked image or file returns not found | A logo, image or other file on this site returns 404 (a `sameAs` link to a page is not checked) |
 
 ## Work status and verification
 

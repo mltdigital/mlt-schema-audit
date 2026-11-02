@@ -29,7 +29,7 @@ class Rules {
 	/**
 	 * Rule-set version. Bump with any rule change.
 	 */
-	const RULESET_VERSION = '2026.10.2';
+	const RULESET_VERSION = '2026.11.1';
 
 	/**
 	 * Group labels.
@@ -84,7 +84,7 @@ class Rules {
 			'URL-001'  => array( 2, 'urls', 'high', 'confirmed', 'Staging or development address in published markup', 'Every URL value.', 'The URL and the matching pattern.', $google, 'The live markup points to a staging or development host, which the public cannot reach.', 'Replace the staging host with the live one. Search the source plugin\'s settings for the old address.' ),
 			'URL-002'  => array( 1, 'urls', 'low', 'optional', 'Site URL uses http on an https site', 'URL values on the site\'s own host.', 'The URL.', $google, 'The value works through a redirect, but the markup and the live site disagree about the address.', 'Use the https address.' ),
 			'URL-003'  => array( 1, 'urls', 'medium', 'conflict', 'WebPage url differs from the canonical URL', 'WebPage entities with a url, on pages with a canonical link.', 'Both URLs.', 'https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls', 'The markup describes a different address from the one the page declares canonical.', 'Check which address is right and correct the other.' ),
-			'URL-004'  => array( 2, 'urls', 'medium', 'confirmed', 'Linked file or page on this site returns not found', 'image, logo and contentUrl values on the site\'s own host.', 'The URL and its HTTP status (404 or 410 only).', $google, 'The markup cites a file that no longer exists. Timeouts and blocks are reported as unavailable, not as broken.', 'Upload the file again or point the markup at the current file.' ),
+			'URL-004'  => array( 3, 'urls', 'medium', 'confirmed', 'Linked image or file on this site returns not found', 'image, logo, thumbnailUrl and contentUrl values on the site\'s own host (not sameAs links).', 'The URL and its HTTP status (404 or 410 only).', $google, 'The markup cites a file that no longer exists. Timeouts and blocks are reported as unavailable, not as broken.', 'Upload the file again or point the markup at the current file.' ),
 			'URL-005'  => array( 2, 'urls', 'low', 'conflict', 'Malformed URL value', 'URL-typed properties.', 'The value.', 'https://schema.org/URL', 'The value is not a usable absolute URL (spaces, an encoded &amp;, or no scheme).', 'Correct the URL in the source field.' ),
 			'FEAT-001' => array( 1, 'features', 'medium', 'eligibility', 'Ratings on the firm\'s own business entity', 'aggregateRating or review on the site\'s own business.', 'The rating values.', 'https://developers.google.com/search/docs/appearance/structured-data/review-snippet', 'Google does not show review stars for reviews a business publishes about itself. The markup is valid; it is not eligible for that feature. It is not a ranking penalty.', 'Decide with the client whether to keep it. Do not describe it to the client as an error.' ),
 			'FEAT-002' => array( 1, 'features', 'medium', 'confirmed', 'FAQPage with no questions', 'FAQPage entities.', 'The mainEntity value.', 'https://developers.google.com/search/docs/appearance/structured-data/faqpage', 'An FAQPage must list its questions in mainEntity. This one lists none.', 'Remove the FAQPage type or add the questions shown on the page.' ),
