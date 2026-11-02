@@ -1076,6 +1076,49 @@ itest(
 	}
 );
 
+itest(
+	'Argon BUG-4: with MLTSA_ALLOW_PRIVATE_SELF, the www or bare variant of a private home host is not refused a second time by WordPress',
+	static function () {
+		// example.test does not resolve here, and WordPress looks the host
+		// up itself, so the *.localhost names (which resolve to 127.0.0.1)
+		// stand in for a local development site and its www variant.
+		$probe = ABSPATH . 'mltsa-host-probe.php';
+		file_put_contents( $probe, "<?php\necho 'probe-ok';\n" );
+		$args  = array( 'timeout' => 10, 'max_bytes' => 100000, 'user_agent' => 'mltsa-test' );
+		$home  = '';
+		$force = static function () use ( &$home ) {
+			return $home;
+		};
+		add_filter( 'pre_option_home', $force );
+		try {
+			foreach ( array( 'example.localhost', 'www.example.localhost' ) as $home_host ) {
+				$home = 'http://' . $home_host . ':8899';
+				foreach ( array( 'example.localhost', 'www.example.localhost' ) as $host ) {
+					$url = 'http://' . $host . ':8899/mltsa-host-probe.php';
+					$on  = ( new MLT\SchemaAudit\Engine\WpHttpClient( true ) )->request( $url, '127.0.0.1', $args );
+					icheck( 200 === $on['status'] && 'probe-ok' === $on['body'], "Allowed with the constant, home {$home_host}, URL {$host}: {$on['status']} {$on['error']}" );
+					if ( $host !== $home_host ) {
+						$off = ( new MLT\SchemaAudit\Engine\WpHttpClient( false ) )->request( $url, '127.0.0.1', $args );
+						icheck( 0 === $off['status'] && '' !== $off['error'], "Still refused without the constant, home {$home_host}, URL {$host}" );
+						// The pinned address decides: link-local and metadata never pass.
+						foreach ( array( '169.254.169.254', '169.254.10.10' ) as $bad ) {
+							$t0  = microtime( true );
+							$res = ( new MLT\SchemaAudit\Engine\WpHttpClient( true ) )->request( $url, $bad, $args );
+							icheck( 0 === $res['status'] && microtime( true ) - $t0 < 2, "Refused before connecting when pinned to {$bad}: {$res['error']}" );
+						}
+					}
+				}
+				// Any other host stays refused.
+				$other = ( new MLT\SchemaAudit\Engine\WpHttpClient( true ) )->request( 'http://other.localhost:8899/mltsa-host-probe.php', '127.0.0.1', $args );
+				icheck( 0 === $other['status'], "Another host is refused, home {$home_host}" );
+			}
+		} finally {
+			remove_filter( 'pre_option_home', $force );
+			unlink( $probe );
+		}
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }
