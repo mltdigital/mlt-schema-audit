@@ -131,6 +131,53 @@ class Repository {
 	}
 
 	/**
+	 * Update a run only while it is still in the given state, in one
+	 * statement, so a cancel saved while a worker was part way through a
+	 * step is never written over.
+	 *
+	 * @param int    $id     Run ID.
+	 * @param string $state  State the run must be in.
+	 * @param array  $fields Fields.
+	 * @return bool Whether a row was changed (reliable when $fields changes the state).
+	 */
+	public function update_run_in_state( $id, $state, array $fields ) {
+		global $wpdb;
+		$changed = $wpdb->update(
+			$this->t( 'runs' ),
+			$fields,
+			array(
+				'id'    => (int) $id,
+				'state' => (string) $state,
+			)
+		);
+		return false !== $changed && $changed > 0;
+	}
+
+	/**
+	 * Cancel a run that is still queued or running. A run that finished
+	 * meanwhile keeps its outcome.
+	 *
+	 * @param int $id Run ID.
+	 * @return bool Whether the run was cancelled.
+	 */
+	public function cancel_run( $id ) {
+		global $wpdb;
+		$changed = $wpdb->query( $wpdb->prepare( "UPDATE {$this->t( 'runs' )} SET state = 'cancelled', phase = 'done', finished_utc = %s WHERE id = %d AND state IN ('queued','running')", self::now(), (int) $id ) );
+		return false !== $changed && $changed > 0;
+	}
+
+	/**
+	 * A run's state, read fresh.
+	 *
+	 * @param int $id Run ID.
+	 * @return string Empty when the run does not exist.
+	 */
+	public function run_state( $id ) {
+		global $wpdb;
+		return (string) $wpdb->get_var( $wpdb->prepare( "SELECT state FROM {$this->t( 'runs' )} WHERE id = %d", (int) $id ) );
+	}
+
+	/**
 	 * The run in progress, if any (oldest first).
 	 *
 	 * @return array|null

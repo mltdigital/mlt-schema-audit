@@ -38,6 +38,7 @@ class Admin {
 		'unchanged'       => array( 'info', 'Nothing changed.' ),
 		'invalid'         => array( 'error', 'Not saved. See the messages below.' ),
 		'cancelled'       => array( 'success', 'The audit was cancelled.' ),
+		'not_cancelled'   => array( 'info', 'Nothing was cancelled: no audit was in progress, or it had just finished.' ),
 	);
 
 	/**
@@ -289,18 +290,14 @@ class Admin {
 		check_admin_referer( 'mltsa_cancel' );
 		$repo = new Repository();
 		$run  = $repo->active_run();
-		if ( $run ) {
-			$repo->update_run(
-				(int) $run['id'],
-				array(
-					'state'        => 'cancelled',
-					'phase'        => 'done',
-					'finished_utc' => Repository::now(),
-				)
-			);
+		// Conditional on the run still being active, so a run that finished
+		// a moment ago keeps its outcome. The worker in turn never writes
+		// over a cancelled run (second review, BUG-5).
+		if ( $run && $repo->cancel_run( (int) $run['id'] ) ) {
 			$repo->log_event( 'run_cancelled', array(), get_current_user_id(), 'run', (int) $run['id'], (int) $run['id'] );
+			self::back( 'mltsa', 'cancelled' );
 		}
-		self::back( 'mltsa', 'cancelled' );
+		self::back( 'mltsa', 'not_cancelled' );
 	}
 
 	/**

@@ -994,6 +994,88 @@ itest(
 	}
 );
 
+/**
+ * What Admin::handle_cancel() does, without its redirect.
+ *
+ * @param int $id Run ID.
+ */
+function cancel_like_admin( $id ) {
+	icheck( ( new Repository() )->cancel_run( $id ), 'Cancel applied to the active run' );
+}
+
+itest(
+	'Argon BUG-5: a cancel issued while the worker is part way through a step wins, in the fetch phase and in the final step',
+	static function () use ( $admin, $hostile_url ) {
+		global $wpdb;
+		$repo = new Repository();
+
+		// 1. Cancel during a page request: the worker makes no further
+		// request, and the run stays cancelled with phase done.
+		finish_active_runs();
+		reset_settings();
+		$id     = Scheduler::start_recheck( $admin, array( home_url( '/' ), $hostile_url ) );
+		$client = new class( $id ) implements MLT\SchemaAudit\Engine\HttpClient {
+			public $count = 0;
+			private $run;
+			public function __construct( $run ) {
+				$this->run = $run;
+			}
+			public function request( $url, $pinned_ip, array $args ) {
+				++$this->count;
+				if ( 1 === $this->count ) {
+					cancel_like_admin( $this->run );
+				}
+				return array( 'status' => 200, 'headers' => array( 'content-type' => 'text/html' ), 'body' => '<html><head><title>t</title></head><body>x</body></html>', 'error' => '', 'error_code' => '', 'pinned' => true, 'truncated' => false );
+			}
+		};
+		( new Worker( $client, static function () {} ) )->process( $id, 30 );
+		$run = $repo->get_run( $id );
+		icheck( 'cancelled' === $run['state'] && 'done' === $run['phase'], 'Fetch phase: ' . $run['state'] . '/' . $run['phase'] );
+		$requests = $client->count;
+
+		// 2. Cancel while the final step is running: the worker must not
+		// write complete over it, nor log the run as finished.
+		finish_active_runs();
+		$id    = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		$fired = false;
+		$hook  = static function ( $query ) use ( $id, &$fired ) {
+			global $wpdb;
+			if ( ! $fired && false !== strpos( $query, 'SELECT coverage, COUNT(*)' ) && false !== strpos( $query, 'run_id = ' . $id ) ) {
+				$fired = true;
+				$phase = $wpdb->get_var( $wpdb->prepare( "SELECT phase FROM {$wpdb->prefix}mltsa_runs WHERE id = %d", $id ) );
+				if ( 'notify' === $phase ) {
+					cancel_like_admin( $id );
+				} else {
+					$fired = false;
+				}
+			}
+			return $query;
+		};
+		add_filter( 'query', $hook );
+		try {
+			( new Worker() )->process( $id, 60 );
+		} finally {
+			remove_filter( 'query', $hook );
+		}
+		$run = $repo->get_run( $id );
+		icheck( $fired, 'The cancel was issued during the final step' );
+		icheck( 'cancelled' === $run['state'] && 'done' === $run['phase'], 'Final step: ' . $run['state'] . '/' . $run['phase'] );
+		$finished = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->prefix}mltsa_events WHERE event_type = 'run_finished' AND run_id = %d", $id ) );
+		icheck( 0 === $finished, 'No run_finished event for a cancelled run: ' . $finished );
+		icheck( 1 === $requests, 'No request after the cancel in the fetch phase: ' . $requests );
+
+		// 3. The other way round: a cancel that arrives after the run
+		// finished leaves its outcome alone.
+		finish_active_runs();
+		$id = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		( new Worker() )->process( $id, 60 );
+		icheck( 'complete' === $repo->get_run( $id )['state'], 'Recheck finished' );
+		icheck( false === $repo->cancel_run( $id ), 'A late cancel reports nothing cancelled' );
+		icheck( 'complete' === $repo->get_run( $id )['state'], 'And the run stays complete' );
+		finish_active_runs();
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }

@@ -152,8 +152,9 @@ class Worker {
 		try {
 			$run = $this->repo->get_run( $run_id );
 			if ( $run && 'queued' === $run['state'] ) {
-				$this->repo->update_run(
+				$this->repo->update_run_in_state(
 					$run_id,
+					'queued',
 					array(
 						'state'       => 'running',
 						'started_utc' => Repository::now(),
@@ -284,7 +285,7 @@ class Worker {
 					$state           = Discovery::sitemap_step( $fetcher, $policy, $state, $deadline );
 					$this->requests += (int) $state['fetched'] - $before;
 					update_option( self::DISCOVERY_OPTION, $state, false );
-					$this->repo->update_run( (int) $run['id'], array( 'progress_utc' => Repository::now() ) );
+					$this->save_run( (int) $run['id'], array( 'progress_utc' => Repository::now() ) );
 					return ! $state['deferred'];
 				}
 				$sitemap = $state['out'];
@@ -311,7 +312,7 @@ class Worker {
 		if ( empty( $scope['urls'] ) ) {
 			$scope['status_exclusions'] = Discovery::status_exclusions( $this->settings );
 		}
-		$this->repo->update_run(
+		$this->save_run(
 			(int) $run['id'],
 			array(
 				'phase'          => 'fetch',
@@ -337,11 +338,11 @@ class Worker {
 		$extractor                = new Extractor();
 		$rows                     = $this->repo->pending_urls( (int) $run['id'], 20 );
 		if ( empty( $rows ) ) {
-			$this->repo->update_run( (int) $run['id'], array( 'phase' => 'site' ) );
+			$this->save_run( (int) $run['id'], array( 'phase' => 'site' ) );
 			return true;
 		}
 		foreach ( $rows as $row ) {
-			if ( microtime( true ) >= $deadline || $this->should_stop( $run ) ) {
+			if ( microtime( true ) >= $deadline || $this->should_stop( $run ) || $this->interrupted( $run ) ) {
 				return false;
 			}
 			$attempts = (int) $row['attempts'] + 1;
@@ -375,7 +376,7 @@ class Worker {
 				$result = self::settle_deferral( $result );
 			}
 			$this->record_page( $run, $row, $result, $extractor, $policy );
-			$this->repo->update_run(
+			$this->save_run(
 				(int) $run['id'],
 				array(
 					'done_count'   => (int) $run['done_count'] + 1,
@@ -583,7 +584,7 @@ class Worker {
 			$summary['resources']      = SiteRules::resources( $facts );
 			$summary['resource_index'] = 0;
 		}
-		$this->repo->update_run(
+		$this->save_run(
 			(int) $run['id'],
 			array(
 				'phase'   => self::full_scope( $run ) ? 'resources' : 'reconcile',
@@ -609,7 +610,7 @@ class Worker {
 		$broken            = isset( $summary['resources_broken'] ) ? (int) $summary['resources_broken'] : 0;
 
 		$total = count( $urls );
-		while ( $index < $total && microtime( true ) < $deadline && ! $this->should_stop( $run ) ) {
+		while ( $index < $total && microtime( true ) < $deadline && ! $this->should_stop( $run ) && ! $this->interrupted( $run ) ) {
 			$url = $urls[ $index ];
 			// Record the attempt before the request, as for pages, so a file
 			// that kills the process is not requested for ever.
@@ -626,7 +627,7 @@ class Worker {
 				$summary['resource_attempts']      = $attempt;
 				$summary['resource_index']         = $index;
 				$summary['resources_broken']       = $broken;
-				$this->repo->update_run( (int) $run['id'], array( 'summary' => (string) wp_json_encode( $summary ) ) );
+				$this->save_run( (int) $run['id'], array( 'summary' => (string) wp_json_encode( $summary ) ) );
 				$result = $fetcher->fetch( $url, 'HEAD', true, $deadline );
 				if ( $result['attempts'] > 0 ) {
 					++$this->requests;
@@ -665,7 +666,7 @@ class Worker {
 		if ( $done ) {
 			unset( $summary['resources'], $summary['resource_attempt_index'], $summary['resource_attempts'] );
 		}
-		$this->repo->update_run(
+		$this->save_run(
 			(int) $run['id'],
 			array(
 				'phase'   => $done ? 'reconcile' : 'resources',
@@ -793,7 +794,7 @@ class Worker {
 		if ( $baseline && self::full_scope( $run ) ) {
 			$summary['comparison'] = $this->comparison_counts( $baseline, $run_id, $current, $coverage, $resources );
 		}
-		$this->repo->update_run(
+		$this->save_run(
 			$run_id,
 			array(
 				'phase'           => 'notify',
@@ -876,10 +877,11 @@ class Worker {
 		} elseif ( $unknown > 0 ) {
 			$state = 'partial';
 		}
-		$this->finish( $run, $state );
-		$run = $this->repo->get_run( (int) $run['id'] );
-		if ( 'monthly' === $run['run_type'] ) {
-			Outbox::queue_for_run( $run );
+		if ( $this->finish( $run, $state ) ) {
+			$run = $this->repo->get_run( (int) $run['id'] );
+			if ( 'monthly' === $run['run_type'] ) {
+				Outbox::queue_for_run( $run );
+			}
 		}
 		Retention::apply();
 	}
@@ -890,11 +892,12 @@ class Worker {
 	 * @param array  $run   Run.
 	 * @param string $state Final state.
 	 * @param array  $extra Extra summary fields.
+	 * @return bool False when the run was no longer running (cancelled meanwhile).
 	 */
 	private function finish( array $run, $state, array $extra = array() ) {
 		delete_option( self::DISCOVERY_OPTION );
 		$summary = array_merge( Repository::decode( $run['summary'] ), $extra );
-		$this->repo->update_run(
+		$closed  = $this->save_run(
 			(int) $run['id'],
 			array(
 				'state'        => $state,
@@ -903,7 +906,35 @@ class Worker {
 				'summary'      => (string) wp_json_encode( $summary ),
 			)
 		);
-		$this->repo->log_event( 'run_finished', array( 'state' => $state ), 0, 'run', (int) $run['id'], (int) $run['id'] );
+		if ( $closed ) {
+			$this->repo->log_event( 'run_finished', array( 'state' => $state ), 0, 'run', (int) $run['id'], (int) $run['id'] );
+		}
+		return $closed;
+	}
+
+	/**
+	 * Save fields on this run only while it is still running. A run
+	 * cancelled from the audit screen while this worker was part way
+	 * through a step stays cancelled (second review, BUG-5).
+	 *
+	 * @param int   $run_id Run ID.
+	 * @param array $fields Fields.
+	 * @return bool Whether the run was still running.
+	 */
+	private function save_run( $run_id, array $fields ) {
+		return $this->repo->update_run_in_state( (int) $run_id, 'running', $fields );
+	}
+
+	/**
+	 * Whether the run has left the running state since this step began,
+	 * for example cancelled from the audit screen. Checked before each
+	 * request, so a cancel stops the requests too.
+	 *
+	 * @param array $run Run.
+	 * @return bool
+	 */
+	private function interrupted( array $run ) {
+		return 'running' !== $this->repo->run_state( (int) $run['id'] );
 	}
 
 	/**
