@@ -257,3 +257,20 @@ mltsa_test(
 		check_same( array( 'https://www.firm.example/page-sitemap.xml' ), $index['sitemaps'], 'Index entries are sitemaps' );
 	}
 );
+
+mltsa_test(
+	'Review SEC-1: a formula hidden behind leading whitespace or control characters is neutralised',
+	static function () {
+		$hidden = array( ' =1+1', "\n=HYPERLINK(\"http://x\")", "\r\n+1", "  \t-2", "\x0B@SUM(A1)", "\x00=1", "\xC2\xA0=1", "\xE2\x80\x8B=1", "\xEF\xBB\xBF=1", ' ', "\n\t" );
+		foreach ( array_slice( $hidden, 0, 9 ) as $value ) {
+			check_same( "'" . $value, Csv::cell( $value ), 'Neutralised ' . json_encode( $value ) );
+		}
+		check_same( "'\t", Csv::cell( "\t" ), 'A lone tab is still prefixed (first byte rule unchanged)' );
+		foreach ( array( ' ', "\n", 'a =1', "line\n=1", ' text', '', 'x-y', "\xFF=1" ) as $safe ) {
+			check_same( $safe, Csv::cell( $safe ), 'Left alone ' . json_encode( $safe ) );
+		}
+		$doc = Csv::document( array( ' =h' ), array( array( "\n=cmd", 'ok' ) ) );
+		check( false !== strpos( $doc, "\"' =h\"" ), 'Header cells go through the same guard' );
+		check( false !== strpos( $doc, "\"'\n=cmd\"" ), 'Document rows go through the same guard' );
+	}
+);
