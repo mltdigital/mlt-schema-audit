@@ -24,6 +24,34 @@ class Evaluator {
 	const SNIPPET_CHARS = 500;
 
 	/**
+	 * Properties that may legitimately carry several values, so definitions
+	 * of one @id split over blocks are combined rather than first-wins.
+	 *
+	 * @var array
+	 */
+	const MULTI_VALUED = array(
+		'sameAs',
+		'telephone',
+		'email',
+		'address',
+		'contactPoint',
+		'identifier',
+		'areaServed',
+		'knowsAbout',
+		'openingHoursSpecification',
+		'department',
+		'subOrganization',
+		'hasOfferCatalog',
+		'makesOffer',
+		'review',
+		'image',
+		'award',
+		'hasCredential',
+		'memberOf',
+		'additionalType',
+	);
+
+	/**
 	 * Hosts that are never live (URL-001).
 	 *
 	 * @var array
@@ -1769,17 +1797,53 @@ class Evaluator {
 	/**
 	 * Properties of a node merged with every definition sharing its @id.
 	 *
+	 * A single-valued property takes the node's own value, then the first
+	 * definition that has one. A multi-valued property (see MULTI_VALUED) is
+	 * combined across every definition, without repeats, so values split over
+	 * two blocks (sameAs, telephone, address) are all seen.
+	 *
 	 * @param array $node Node.
 	 * @return array
 	 */
 	private function merged_props( array $node ) {
 		$props = $node['props'];
-		if ( '' !== $node['id'] ) {
-			foreach ( $this->graph->definitions( $node['id'] ) as $def ) {
-				$props = $props + $def['props'];
+		if ( '' === $node['id'] ) {
+			return $props;
+		}
+		foreach ( $this->graph->definitions( $node['id'] ) as $def ) {
+			foreach ( $def['props'] as $prop => $value ) {
+				if ( ! array_key_exists( $prop, $props ) ) {
+					$props[ $prop ] = $value;
+				} elseif ( in_array( $prop, self::MULTI_VALUED, true ) ) {
+					$props[ $prop ] = self::combine_values( $props[ $prop ], $value );
+				}
 			}
 		}
 		return $props;
+	}
+
+	/**
+	 * Two values of a multi-valued property as one: the first's values, then
+	 * any of the second's not already there. One distinct value stays as it
+	 * was written; more become a list.
+	 *
+	 * @param mixed $first  Value.
+	 * @param mixed $second Value.
+	 * @return mixed
+	 */
+	private static function combine_values( $first, $second ) {
+		$out  = array();
+		$seen = array();
+		foreach ( array( $first, $second ) as $value ) {
+			foreach ( is_array( $value ) && Graph::is_list( $value ) ? $value : array( $value ) as $item ) {
+				$hash = Extractor::canonical_json( $item );
+				if ( ! isset( $seen[ $hash ] ) ) {
+					$seen[ $hash ] = true;
+					$out[]         = $item;
+				}
+			}
+		}
+		return 1 === count( $out ) ? $out[0] : $out;
 	}
 
 	/**

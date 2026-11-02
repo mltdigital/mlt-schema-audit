@@ -226,3 +226,39 @@ mltsa_test(
 		}
 	}
 );
+
+mltsa_test(
+	'Review ENG-2: multi-valued properties split across definitions of one @id are combined; single-valued ones stay first-wins',
+	static function () {
+		$ch   = 'https://find-and-update.company-information.service.gov.uk/company/SC123456';
+		$base = array( '@context' => 'https://schema.org', '@type' => 'LegalService', '@id' => 'https://www.example-legal.co.uk/#org' );
+		$page = static function ( array $a, array $b ) use ( $base ) {
+			return '<html><head><script type="application/ld+json">' . json_encode( $base + $a ) . '</script>'
+				. '<script type="application/ld+json">' . json_encode( $base + $b ) . '</script></head>'
+				. '<body><p>Example Legal, solicitors in Glasgow.</p></body></html>';
+		};
+
+		// The Companies House link is in the second block only, behind another sameAs there.
+		$split = audit_html( $page( array( 'name' => 'Example Legal', 'sameAs' => array( 'https://www.facebook.com/examplelegal' ) ), array( 'sameAs' => array( 'https://www.linkedin.com/company/examplelegal', $ch ) ) ) );
+		check( in_array( 'FACT-012', rule_ids( $split['findings'] ), true ), 'sameAs from the second definition is seen' );
+
+		// A string in one block and a list in the other combine too.
+		$mixed = audit_html( $page( array( 'name' => 'Example Legal', 'sameAs' => 'https://www.facebook.com/examplelegal' ), array( 'sameAs' => $ch ) ) );
+		check( in_array( 'FACT-012', rule_ids( $mixed['findings'] ), true ), 'string and string combine' );
+
+		// Single-valued properties keep their meaning: the first name wins and is still a string.
+		$names = audit_html( $page( array( 'name' => 'Example Legal' ), array( 'name' => 'Other Name' ) ) );
+		check( ! in_array( 'FACT-012', rule_ids( $names['findings'] ), true ), 'No company number, no FACT-012' );
+
+		// The combining rule: first's values, then new ones; one distinct value keeps its shape.
+		$combine = new ReflectionMethod( 'MLT\\SchemaAudit\\Engine\\Evaluator', 'combine_values' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$combine->setAccessible( true );
+		}
+		check_same( array( 'a', 'b', 'c' ), $combine->invoke( null, array( 'a', 'b' ), array( 'b', 'c' ) ), 'Lists combine without repeats' );
+		check_same( array( 'a', 'b' ), $combine->invoke( null, 'a', 'b' ), 'Two strings become a list' );
+		check_same( 'a', $combine->invoke( null, 'a', array( 'a' ) ), 'One distinct value keeps its shape' );
+		check_same( array( array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), array( 'postalCode' => 'G2 2BB', '@type' => 'PostalAddress' ) ), $combine->invoke( null, array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), array( 'postalCode' => 'G2 2BB', '@type' => 'PostalAddress' ) ), 'Two address objects become a list' );
+		check_same( array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), $combine->invoke( null, array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), array( 'postalCode' => 'G1 1AA', '@type' => 'PostalAddress' ) ), 'Same object in a different key order is one value' );
+	}
+);
