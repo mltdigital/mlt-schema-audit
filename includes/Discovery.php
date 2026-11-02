@@ -135,11 +135,13 @@ class Discovery {
 	/**
 	 * Read at most one sitemap, so a worker slice never holds more than one
 	 * sitemap request and a killed process loses at most that one (finding 4).
-	 * A fetch the deadline deferred stays at the front of the queue. Only a
-	 * deferral after a request made with the whole slice ($fair) counts; on
-	 * the third the sitemap counts as read and failed. A sitemap that could
-	 * not be read (other than not found or gone) is counted in not_read, so
-	 * the audit screen shows it (branch review R1).
+	 * A fetch the deadline deferred stays at the front of the queue, with the
+	 * redirect hop or retry it reached kept in 'resume', so the next step
+	 * continues from there (branch review S1). A deferral counts only when
+	 * the step had the whole slice ($fair) and still could not make a request
+	 * (not a retry's wait); on the third the sitemap counts as read and
+	 * failed. A sitemap that could not be read (other than not found or gone)
+	 * is counted in not_read, so the audit screen shows it (branch review R1).
 	 *
 	 * @param Fetcher   $fetcher  Fetcher.
 	 * @param UrlPolicy $policy   Policy.
@@ -159,12 +161,14 @@ class Discovery {
 			array_shift( $state['queue'] );
 			return $state;
 		}
-		$result = $fetcher->fetch( $url, 'GET', false, $deadline );
+		$resume = isset( $state['resume'] ) && is_array( $state['resume'] ) ? $state['resume'] : array();
+		$result = $fetcher->fetch( $url, 'GET', false, $deadline, $resume );
 		if ( $result['attempts'] > 0 ) {
 			++$state['fetched'];
 		}
 		if ( 'deferred' === $result['outcome'] ) {
-			if ( $result['attempts'] > 0 && $fair ) {
+			$state['resume'] = $result['resume'];
+			if ( Fetcher::deferral_counts( $result, $fair ) ) {
 				++$state['deferrals'];
 			}
 			if ( $state['deferrals'] < 3 ) {
@@ -172,6 +176,7 @@ class Discovery {
 				return $state;
 			}
 		}
+		unset( $state['resume'] );
 		array_shift( $state['queue'] );
 		$state['seen'][ $url ] = true;
 		$state['deferrals']    = 0;

@@ -336,20 +336,21 @@ mltsa_test(
 		check_same( 1, count( $client->requests ), 'one request for the index' );
 		check_same( 2, count( $state['queue'] ), 'children queued, fallbacks dropped' );
 
-		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 2 );
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 2, false );
 		check( $state['deferred'], 'no room for the full timeout: deferred' );
 		check_same( 1, count( $client->requests ), 'no request made' );
-		check_same( 0, $state['deferrals'], 'not counted' );
-
-		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 4, false );
-		check( $state['deferred'], 'retry did not fit: deferred' );
 		check_same( 0, $state['deferrals'], 'a step without the whole slice does not count' );
 
-		for ( $i = 1; $i <= 3; $i++ ) {
-			$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 4, true );
-			check_same( $i < 3, $state['deferred'], 'deferred until the third fair deferral, step ' . $i );
-		}
-		check_same( 2, $state['read'], 'third fair deferral counts the sitemap as read' );
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 4, true );
+		check( $state['deferred'], 'retry did not fit: deferred' );
+		check_same( 2, count( $client->requests ), 'one request made' );
+		check_same( 0, $state['deferrals'], 'a deferral after a request does not count (branch review S1)' );
+		check( ! empty( $state['resume'] ), 'the retry it reached is kept' );
+
+		$state = Discovery::sitemap_step( $fetcher, $policy, $state, microtime( true ) + 100, true );
+		check( ! $state['deferred'], 'the next slice continues the retries to the end' );
+		check_same( 4, count( $client->requests ), 'from the retry reached, not from the start' );
+		check_same( 2, $state['read'], 'a sitemap still refusing after its retries counts as read' );
 		check_same( 1, $state['not_read'], 'and as not read' );
 		check_same( array( 'https://www.example-legal.co.uk/wp-sitemap-posts-post-1.xml' ), $state['queue'], 'moved on to the next sitemap' );
 
@@ -362,9 +363,9 @@ mltsa_test(
 		$slow = new Fetcher( $policy, $client, array( 'timeout' => 15 ), static function () {} );
 		$fresh = Discovery::sitemap_state( $policy );
 		for ( $i = 0; $i < 6; $i++ ) {
-			$fresh = Discovery::sitemap_step( $slow, $policy, $fresh, microtime( true ) + 8 );
+			$fresh = Discovery::sitemap_step( $slow, $policy, $fresh, microtime( true ) + 8, false );
 		}
-		check_same( 0, $fresh['read'], 'a slice shorter than the timeout never gives a sitemap up' );
+		check_same( 0, $fresh['read'], 'a step without the whole slice never gives a sitemap up' );
 		while ( ! $fresh['done'] ) {
 			$fresh = Discovery::sitemap_step( $slow, $policy, $fresh, microtime( true ) + 17 );
 		}
@@ -391,5 +392,52 @@ mltsa_test(
 		check_same( 'too_large', $get['outcome'], 'A GET body over the cap is still too large' );
 		$client->responses[ $url ]['status'] = 404;
 		check_same( 'not_found', mltsa_fetcher( $client )->fetch( $url, 'HEAD', true )['outcome'], 'A missing file is still not found' );
+	}
+);
+
+mltsa_test(
+	'Branch review S1: a redirect hop or retry that does not fit the slice continues in the next one and is read',
+	static function () {
+		$client = new Scripted_Client();
+		$client->responses['https://www.example-legal.co.uk/old'] = static function () {
+			usleep( 1200000 );
+			return array( 'status' => 301, 'headers' => array( 'location' => 'https://www.example-legal.co.uk/new/' ) );
+		};
+		$client->responses['https://www.example-legal.co.uk/new/'] = array( 'body' => '<html></html>' );
+		$fetcher = new Fetcher( mltsa_policy(), $client, array( 'timeout' => 3 ), static function () {} );
+
+		$first = $fetcher->fetch( 'https://www.example-legal.co.uk/old', 'GET', false, microtime( true ) + 4 );
+		$client->responses['https://www.example-legal.co.uk/old'] = array( 'status' => 500 );
+		check_same( 'deferred', $first['outcome'], 'the second hop does not fit: deferred' );
+		check_same( 1, $first['attempts'], 'one request made' );
+		check( ! Fetcher::deferral_counts( $first, true ), 'a deferral after a request does not count' );
+
+		$second = $fetcher->fetch( 'https://www.example-legal.co.uk/old', 'GET', false, microtime( true ) + 4, $first['resume'] );
+		check_same( 'ok', $second['outcome'], 'continued at the second hop and read' );
+		check_same( 'https://www.example-legal.co.uk/new/', $second['final_url'], 'final URL' );
+		check_same( 2, count( $client->requests ), 'the first hop is not requested again' );
+
+		$other = $fetcher->fetch( 'https://www.example-legal.co.uk/elsewhere/', 'GET', false, microtime( true ) + 4, $first['resume'] );
+		check_same( 'https://www.example-legal.co.uk/elsewhere/', $client->requests[2]['url'], 'resume state for another URL is ignored' );
+
+		$client->responses['https://www.example-legal.co.uk/busy/'] = array( 'status' => 503 );
+		$sleeps = array();
+		$retry  = new Fetcher( mltsa_policy(), $client, array( 'timeout' => 3 ), static function ( $s ) use ( &$sleeps ) { $sleeps[] = $s; } );
+		$busy   = $retry->fetch( 'https://www.example-legal.co.uk/busy/', 'GET', false, microtime( true ) + 4 );
+		check_same( 'budget_retry', $busy['reason'], 'the retry and its wait do not fit' );
+		$busy = $retry->fetch( 'https://www.example-legal.co.uk/busy/', 'GET', false, microtime( true ) + 100, $busy['resume'] );
+		check_same( 'http_error', $busy['outcome'], 'a page still refusing after its retries is recorded as refused, not as out of time' );
+		check_same( 503, $busy['status'], 'with its status' );
+		check_same( 2, $busy['attempts'], 'the two remaining tries, this call' );
+	}
+);
+
+mltsa_test(
+	'Branch review S1: only a whole slice with no request and no retry wait counts toward giving a URL up',
+	static function () {
+		check( Fetcher::deferral_counts( array( 'attempts' => 0, 'reason' => 'budget_spent' ), true ), 'whole slice, no request: counts' );
+		check( ! Fetcher::deferral_counts( array( 'attempts' => 0, 'reason' => 'budget_spent' ), false ), 'not the whole slice: does not count' );
+		check( ! Fetcher::deferral_counts( array( 'attempts' => 1, 'reason' => 'budget_spent' ), true ), 'a request moved it on: does not count' );
+		check( ! Fetcher::deferral_counts( array( 'attempts' => 0, 'reason' => 'budget_retry' ), true ), 'waiting for a retry: does not count' );
 	}
 );

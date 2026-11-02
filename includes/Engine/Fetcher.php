@@ -93,17 +93,26 @@ class Fetcher {
 	 * With a deadline, no request outlives it, and none is cut short: a
 	 * request (or a retry, with its wait) starts only when the time left
 	 * covers the full timeout setting. One there was no time left to make or
-	 * retry is "deferred" (reason budget_spent or budget_retry), so the caller
-	 * can try it again in a later slice. A timeout is therefore always the
-	 * site taking longer than the setting (branch review R1).
+	 * retry is "deferred" (reason budget_spent, or budget_retry while a
+	 * retry's wait has not passed), so the caller can try it again in a later
+	 * slice. A timeout is therefore always the site taking longer than the
+	 * setting (branch review R1).
+	 *
+	 * A deferred result carries 'resume': the redirect hop, retry and wait it
+	 * stopped at. Passed back in a later call for the same URL and method,
+	 * the fetch continues from there instead of starting again, so a redirect
+	 * chain or retries longer than one slice are read across slices, each
+	 * request with the full timeout (branch review S1). 'attempts' counts the
+	 * requests made in this call only.
 	 *
 	 * @param string $url         Absolute URL.
 	 * @param string $method      GET or HEAD.
 	 * @param bool   $is_resource True for an image or logo check (wider path policy, every hop).
 	 * @param float  $deadline    Unix time (microtime) to finish by; 0 for none.
+	 * @param array  $resume      'resume' of an earlier deferred result; ignored unless for this URL and method.
 	 * @return array
 	 */
-	public function fetch( $url, $method = 'GET', $is_resource = false, $deadline = 0.0 ) {
+	public function fetch( $url, $method = 'GET', $is_resource = false, $deadline = 0.0, array $resume = array() ) {
 		$started = microtime( true );
 		$result  = array(
 			'requested_url' => (string) $url,
@@ -120,8 +129,22 @@ class Fetcher {
 			'duration_ms'   => 0,
 		);
 
-		$current = (string) $url;
-		for ( $hop = 0; $hop <= (int) $this->limits['max_redirects']; $hop++ ) {
+		$current    = (string) $url;
+		$first_hop  = 0;
+		$first_try  = 0;
+		$not_before = 0.0;
+		$prior      = 0;
+		if ( $this->resumable( $resume, $url, $method ) ) {
+			$current             = (string) $resume['current'];
+			$first_hop           = (int) $resume['hop'];
+			$first_try           = (int) $resume['try'];
+			$not_before          = (float) $resume['not_before'];
+			$prior               = (int) $resume['attempts'];
+			$result['chain']     = (array) $resume['chain'];
+			$result['final_url'] = $current;
+			$result['status']    = (int) $resume['status'];
+		}
+		for ( $hop = $first_hop; $hop <= (int) $this->limits['max_redirects']; $hop++ ) {
 			$check = $this->policy->check_url( $current, $is_resource );
 			if ( ! $check['ok'] ) {
 				return $this->finish( $result, 'blocked', $check['reason'], $started );
@@ -132,8 +155,21 @@ class Fetcher {
 				return $this->finish( $result, 'dns_failure' === $address['reason'] ? 'unavailable' : 'blocked', $address['reason'], $started );
 			}
 
-			$response = $this->request_with_retries( $current, $address['ip'], $method, $result, (float) $deadline );
+			$response   = $this->request_with_retries( $current, $address['ip'], $method, $result, (float) $deadline, $first_try, $not_before );
+			$first_try  = 0;
+			$not_before = 0.0;
 			if ( 'deferred' === $response['error_code'] ) {
+				$result['resume'] = array(
+					'url'        => (string) $url,
+					'method'     => (string) $method,
+					'current'    => $current,
+					'hop'        => $hop,
+					'try'        => (int) $response['try'],
+					'not_before' => (float) $response['not_before'],
+					'status'     => (int) $result['status'],
+					'chain'      => $result['chain'],
+					'attempts'   => $prior + (int) $result['attempts'],
+				);
 				return $this->finish( $result, 'deferred', $response['reason'], $started );
 			}
 			if ( '' !== $response['error_code'] ) {
@@ -189,16 +225,54 @@ class Fetcher {
 	}
 
 	/**
+	 * Whether a deferred result counts toward the caller's limit of three:
+	 * only when the URL had the whole slice ($fair) and still no request
+	 * could start. A deferral after a request has moved the fetch on (the
+	 * resume state continues from there, and a fetch makes a bounded number
+	 * of requests); one waiting for a retry's backoff ends as time passes;
+	 * one without the whole slice has it next time. So a URL is never given
+	 * up while it is being read, and a run always ends (branch review S1).
+	 *
+	 * @param array $result Deferred fetch result.
+	 * @param bool  $fair   Whether the URL had the whole slice.
+	 * @return bool
+	 */
+	public static function deferral_counts( array $result, $fair ) {
+		return (bool) $fair && 0 === (int) $result['attempts'] && 'budget_retry' !== $result['reason'];
+	}
+
+	/**
+	 * Whether a resume state belongs to this fetch and is within the limits.
+	 *
+	 * @param array  $resume Resume state.
+	 * @param string $url    URL.
+	 * @param string $method Method.
+	 * @return bool
+	 */
+	private function resumable( array $resume, $url, $method ) {
+		foreach ( array( 'url', 'method', 'current', 'hop', 'try', 'not_before', 'status', 'chain', 'attempts' ) as $key ) {
+			if ( ! array_key_exists( $key, $resume ) ) {
+				return false;
+			}
+		}
+		return (string) $url === $resume['url'] && (string) $method === $resume['method']
+			&& (int) $resume['hop'] >= 0 && (int) $resume['hop'] <= (int) $this->limits['max_redirects']
+			&& (int) $resume['try'] >= 0 && (int) $resume['try'] <= max( 0, (int) $this->limits['retries'] );
+	}
+
+	/**
 	 * One hop, retried for transient failures with backoff.
 	 *
-	 * @param string $url      URL.
-	 * @param string $ip       Pinned address.
-	 * @param string $method   Method.
-	 * @param array  $result   Result being built (attempt count updated).
-	 * @param float  $deadline Unix time to finish by; 0 for none.
-	 * @return array
+	 * @param string $url        URL.
+	 * @param string $ip         Pinned address.
+	 * @param string $method     Method.
+	 * @param array  $result     Result being built (attempt count updated).
+	 * @param float  $deadline   Unix time to finish by; 0 for none.
+	 * @param int    $first_try  Try to start at (a resumed retry).
+	 * @param float  $not_before Unix time before which that try must not start (its backoff).
+	 * @return array Response; a deferral adds the try and wait to resume at.
 	 */
-	private function request_with_retries( $url, $ip, $method, array &$result, $deadline ) {
+	private function request_with_retries( $url, $ip, $method, array &$result, $deadline, $first_try = 0, $not_before = 0.0 ) {
 		$empty   = array(
 			'status'     => 0,
 			'headers'    => array(),
@@ -209,16 +283,23 @@ class Fetcher {
 		);
 		$tries   = 1 + max( 0, (int) $this->limits['retries'] );
 		$timeout = (int) $this->limits['timeout'];
-		for ( $i = 0; $i < $tries; $i++ ) {
-			if ( $deadline > 0 && microtime( true ) + $timeout > $deadline ) {
-				// Not enough time left for the full timeout: never shorten it.
+		for ( $i = (int) $first_try; $i < $tries; $i++ ) {
+			$wait = $not_before > 0 ? max( 0, (int) ceil( $not_before - microtime( true ) ) ) : 0;
+			if ( $deadline > 0 && microtime( true ) + $wait + $timeout > $deadline ) {
+				// Not enough time left for the wait and the full timeout:
+				// never shorten it. The caller resumes at this try.
 				return array_merge(
 					$empty,
 					array(
 						'error_code' => 'deferred',
-						'reason'     => 'budget_spent',
+						'reason'     => $wait > 0 ? 'budget_retry' : 'budget_spent',
+						'try'        => $i,
+						'not_before' => $not_before,
 					)
 				);
+			}
+			if ( $wait > 0 ) {
+				call_user_func( $this->sleep, $wait );
 			}
 			++$result['attempts'];
 			$response  = $this->client->request(
@@ -239,15 +320,9 @@ class Fetcher {
 			if ( ! $transient || $i === $tries - 1 ) {
 				return $response;
 			}
-			$wait = (int) $this->limits['backoff'] * ( $i + 1 );
-			if ( $deadline > 0 && microtime( true ) + $wait + $timeout > $deadline ) {
-				$response['error_code'] = 'deferred';
-				$response['reason']     = 'budget_retry';
-				return $response;
-			}
-			call_user_func( $this->sleep, $wait );
+			$not_before = microtime( true ) + (int) $this->limits['backoff'] * ( $i + 1 );
 		}
-		return $response;
+		return array_merge( $empty, array( 'error_code' => 'error' ) );
 	}
 
 	/**

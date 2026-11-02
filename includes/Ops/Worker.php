@@ -49,6 +49,11 @@ class Worker {
 	const DISCOVERY_OPTION = 'mltsa_discovery_state';
 
 	/**
+	 * Option holding the resume state of the page fetch a slice deferred.
+	 */
+	const PAGE_RESUME_OPTION = 'mltsa_page_resume';
+
+	/**
 	 * Seconds after a tick's budget before its pre-scheduled continuation
 	 * fires: longer than the run lock's grace, so a killed worker's lock has
 	 * expired by then.
@@ -106,6 +111,14 @@ class Worker {
 	private $fresh = false;
 
 	/**
+	 * Whether the slice ended because the next request would not fit in
+	 * the time left, so the next slice can start at once (branch review S5).
+	 *
+	 * @var bool
+	 */
+	private $cut_short = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param HttpClient|null $client Transport.
@@ -161,10 +174,11 @@ class Worker {
 	/**
 	 * One scheduler tick: catch-up check, the active run, then the outbox.
 	 *
-	 * @param int $budget Seconds.
+	 * @param int       $budget Seconds.
+	 * @param self|null $worker Worker, injectable for tests.
 	 * @return array Status.
 	 */
-	public static function tick( $budget ) {
+	public static function tick( $budget, $worker = null ) {
 		update_option( 'mltsa_last_tick', time(), false );
 		if ( Settings::constant_disabled() ) {
 			return array( 'state' => 'disabled' );
@@ -178,13 +192,17 @@ class Worker {
 			// Queue the next tick before working, so a process killed part way
 			// through (PHP time limit, host kill) still has a continuation
 			// (finding 4). A normal finish below brings it forward.
-			$worker = new self();
+			$worker = $worker instanceof self ? $worker : new self();
 			Scheduler::continue_worker( self::slice_budget( $budget, $worker->timeout ) + self::CONTINUATION_GRACE );
 			$status = $worker->process( (int) $run['id'], $budget );
 		}
 		Outbox::process();
 		if ( $repo->active_run() ) {
-			Scheduler::continue_worker( 30 );
+			// A slice cut short by a request that would not fit has more work
+			// ready now: queue the next event after the usual gap between
+			// pages, not 30 seconds, so plain WordPress cron reads at least as
+			// many pages as before branch review R1 (S5).
+			Scheduler::continue_worker( $run && $worker->cut_short ? (int) ceil( (float) $worker->settings['gap_seconds'] ) : 30 );
 		} elseif ( $run ) {
 			Scheduler::clear_worker();
 		}
@@ -205,10 +223,11 @@ class Worker {
 			// upgrade completes (branch review R5).
 			return $this->status( $run_id, 'schema_outdated' );
 		}
-		$budget      = self::slice_budget( $budget, $this->timeout );
-		$deadline    = microtime( true ) + $budget;
-		$token       = wp_generate_password( 20, false );
-		$this->fresh = true;
+		$budget          = self::slice_budget( $budget, $this->timeout );
+		$deadline        = microtime( true ) + $budget;
+		$token           = wp_generate_password( 20, false );
+		$this->fresh     = true;
+		$this->cut_short = false;
 		if ( ! $this->repo->claim_run( $run_id, $token, (int) $budget + 120 ) ) {
 			return $this->status( $run_id, 'locked' );
 		}
@@ -352,6 +371,9 @@ class Worker {
 					$this->fresh     = false;
 					$this->requests += (int) $state['fetched'] - $before;
 					update_option( self::DISCOVERY_OPTION, $state, false );
+					if ( $state['deferred'] ) {
+						$this->cut_short = true;
+					}
 					$this->save_run( (int) $run['id'], array( 'progress_utc' => Repository::now() ) );
 					return ! $state['deferred'];
 				}
@@ -431,23 +453,37 @@ class Worker {
 			$this->repo->update_run_url( (int) $row['id'], array( 'attempts' => $attempts ) );
 			$fair        = $this->fresh;
 			$this->fresh = false;
-			$result      = $fetcher->fetch( $row['url'], 'GET', false, $deadline );
+			$resume      = self::page_resume( (int) $run['id'], (int) $row['id'] );
+			$result      = $fetcher->fetch( $row['url'], 'GET', false, $deadline, $resume );
 			if ( $result['attempts'] > 0 ) {
 				++$this->requests;
 			}
 			if ( 'deferred' === $result['outcome'] ) {
-				if ( 0 === (int) $result['attempts'] || ! $fair ) {
-					// No request was made, or the URL did not have the whole
-					// slice: the attempt does not count. The URL stays first
-					// in line, so the next slice starts with it.
+				// The URL stays first in line and the next slice continues
+				// the fetch from the hop or retry it reached (branch review
+				// S1). Only a deferral with the whole slice and no request
+				// counts as an attempt.
+				$this->cut_short = true;
+				update_option(
+					self::PAGE_RESUME_OPTION,
+					array(
+						'run_id' => (int) $run['id'],
+						'url_id' => (int) $row['id'],
+						'resume' => $result['resume'],
+					),
+					false
+				);
+				if ( ! Fetcher::deferral_counts( $result, $fair ) ) {
 					$this->repo->update_run_url( (int) $row['id'], array( 'attempts' => $attempts - 1 ) );
 					return false;
 				}
 				if ( $attempts < self::MAX_URL_ATTEMPTS ) {
-					// Leave the URL pending; the next slice starts with it.
 					return false;
 				}
 				$result = self::settle_deferral( $result );
+			}
+			if ( ! empty( $resume ) ) {
+				delete_option( self::PAGE_RESUME_OPTION );
 			}
 			$this->record_page( $run, $row, $result, $extractor, $policy );
 			$this->save_run(
@@ -464,6 +500,22 @@ class Worker {
 	}
 
 	/**
+	 * The resume state of a page fetch an earlier slice deferred, if it is
+	 * for this run and URL (branch review S1).
+	 *
+	 * @param int $run_id Run ID.
+	 * @param int $url_id Run URL row ID.
+	 * @return array
+	 */
+	private static function page_resume( $run_id, $url_id ) {
+		$saved = get_option( self::PAGE_RESUME_OPTION );
+		if ( ! is_array( $saved ) || ! isset( $saved['run_id'], $saved['url_id'], $saved['resume'] ) || (int) $saved['run_id'] !== $run_id || (int) $saved['url_id'] !== $url_id ) {
+			return array();
+		}
+		return (array) $saved['resume'];
+	}
+
+	/**
 	 * The outcome recorded for a URL or file deferred on its last attempt,
 	 * each of them with a whole slice to itself (a redirect chain or retries
 	 * longer than a slice): an error with reason budget_spent, counted as
@@ -473,6 +525,7 @@ class Worker {
 	 * @return array
 	 */
 	private static function settle_deferral( array $result ) {
+		unset( $result['resume'] );
 		$result['outcome'] = 'error';
 		$result['reason']  = 'budget_spent';
 		return $result;
@@ -705,19 +758,35 @@ class Worker {
 				$is_file     = SiteRules::is_file_check( $resources[ $url ] );
 				$fair        = $this->fresh;
 				$this->fresh = false;
-				$result      = $fetcher->fetch( $url, 'HEAD', $is_file, $deadline );
-				if ( $result['attempts'] > 0 ) {
-					++$this->requests;
+				// A deferred check resumes where it stopped: the hop or retry
+				// it reached, and with the GET when the HEAD was refused
+				// (branch reviews S1 and S2).
+				$saved  = ( isset( $summary['resource_resume'] ) && (int) $summary['resource_resume']['index'] === $index ) ? $summary['resource_resume'] : array();
+				$method = isset( $saved['method'] ) && 'GET' === $saved['method'] ? 'GET' : 'HEAD';
+				$resume = isset( $saved['resume'] ) ? (array) $saved['resume'] : array();
+				unset( $summary['resource_resume'] );
+				$result = array(
+					'outcome'  => '',
+					'status'   => 0,
+					'attempts' => 0,
+				);
+				if ( 'HEAD' === $method ) {
+					$result = $fetcher->fetch( $url, 'HEAD', $is_file, $deadline, $resume );
+					if ( $result['attempts'] > 0 ) {
+						++$this->requests;
+					}
+					$resume = array();
 				}
-				if ( in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
-					$head_attempts = (int) $result['attempts'];
-					$result        = $fetcher->fetch( $url, 'GET', $is_file, $deadline );
+				if ( 'GET' === $method || in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
+					$head_attempts = 'HEAD' === $method ? (int) $result['attempts'] : 0;
+					$method        = 'GET';
+					$result        = $fetcher->fetch( $url, 'GET', $is_file, $deadline, $resume );
 					if ( $result['attempts'] > 0 ) {
 						++$this->requests;
 					}
 					// The HEAD was a request: HEAD and GET are one accounted
-					// attempt, so a GET deferred after a slow refusal counts
-					// and the check cannot repeat for ever (branch review S2).
+					// attempt, so a GET deferred after a slow refusal does not
+					// count and the next slice starts with the GET (S2).
 					$result['attempts'] = (int) $result['attempts'] + $head_attempts;
 					// The check asks only whether the file or page exists: a
 					// 2xx answer to the GET proves it, even with its body over
@@ -727,8 +796,15 @@ class Worker {
 					}
 				}
 				if ( 'deferred' === $result['outcome'] ) {
-					// As for pages: only a deferral with the whole slice counts.
-					if ( 0 === (int) $result['attempts'] || ! $fair ) {
+					// As for pages: only a deferral with the whole slice and
+					// no request counts.
+					$this->cut_short            = true;
+					$summary['resource_resume'] = array(
+						'index'  => $index,
+						'method' => $method,
+						'resume' => $result['resume'],
+					);
+					if ( ! Fetcher::deferral_counts( $result, $fair ) ) {
 						$summary['resource_attempts'] = $attempt - 1;
 						break;
 					}
@@ -754,7 +830,7 @@ class Worker {
 		$summary['resources_broken'] = $broken;
 		$done                        = $index >= count( $urls );
 		if ( $done ) {
-			unset( $summary['resources'], $summary['resource_attempt_index'], $summary['resource_attempts'] );
+			unset( $summary['resources'], $summary['resource_attempt_index'], $summary['resource_attempts'], $summary['resource_resume'] );
 		}
 		$this->save_run(
 			(int) $run['id'],

@@ -801,16 +801,18 @@ itest(
 		};
 		( new Worker( $client, static function () {} ) )->process( $id, 5 );
 		$first = $row();
+		$now   = $first;
 		icheck( 1 === $client->busy && 'pending' === $first['coverage'] && 0 === (int) $first['attempts'], 'Deferred after another page in the slice: not counted ' . wp_json_encode( $first ) );
-		for ( $i = 1; $i <= 3; $i++ ) {
+		// Branch review S1: each later slice continues the retries from where
+		// the last stopped, so the page is recorded as the site refusing it,
+		// not as the worker running out of time.
+		for ( $i = 1; $i <= 20 && 'pending' === $now['coverage']; $i++ ) {
+			usleep( 500000 );
 			( new Worker( $client, static function () {} ) )->process( $id, 5 );
 			$now = $row();
-			if ( $i < 3 ) {
-				icheck( 'pending' === $now['coverage'] && $i === (int) $now['attempts'], 'Deferred with the whole slice: counted ' . $i . ' ' . wp_json_encode( $now ) );
-			}
 		}
-		icheck( 4 === $client->busy, 'One request per slice: ' . $client->busy );
-		icheck( 'error' === $now['coverage'] && 'budget_spent' === $now['coverage_reason'], 'Third counted deferral recorded: ' . wp_json_encode( $now ) );
+		icheck( 3 === $client->busy, 'One request and two retries in all: ' . $client->busy );
+		icheck( 'http_503' === $now['coverage_reason'], 'Recorded as refused with its status: ' . wp_json_encode( $now ) );
 		finish_active_runs();
 	}
 );
@@ -867,7 +869,52 @@ itest(
 		$summary = Repository::decode( $run['summary'] );
 		icheck( 'resources' !== $run['phase'] && 1 === (int) $summary['resource_index'], 'Moved past the file: ' . $run['phase'] . ' ' . wp_json_encode( $summary ) );
 		icheck( $slice <= 3, 'Within three slices: ' . $slice . ' ' . implode( ',', $client->log ) );
+		icheck( 0 === (int) $summary['resources_broken'] && 2 === count( $client->log ), 'The file is read by the GET in the next slice (branch review S1): ' . wp_json_encode( $summary ) );
+		icheck( array( 'HEAD', 'GET' ) === $client->log, 'The HEAD is not sent again: ' . implode( ',', $client->log ) );
 		finish_active_runs();
+	}
+);
+
+itest(
+	'Branch review S1 and S5: a page behind a slow redirect is read in the next slice, which WordPress cron queues at once',
+	static function () use ( $admin ) {
+		global $wpdb;
+		finish_active_runs();
+		// Timeout 3, so a slice is 5 seconds: after a 2.5 second first hop
+		// the second has no full timeout left.
+		reset_settings( array( 'timeout' => 3 ) );
+		$old    = home_url( '/s1-old' );
+		$id     = Scheduler::start_recheck( $admin, array( $old ) );
+		$client = new class() implements MLT\SchemaAudit\Engine\HttpClient {
+			public $log = array();
+			public function request( $url, $pinned_ip, array $args ) {
+				$this->log[] = $url;
+				if ( false !== strpos( $url, 's1-old' ) ) {
+					usleep( 2500000 );
+					return array( 'status' => 301, 'error_code' => '', 'error' => '', 'headers' => array( 'location' => home_url( '/s1-new/' ) ), 'body' => '', 'truncated' => false, 'pinned' => true );
+				}
+				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'text/html' ), 'body' => '<html></html>', 'truncated' => false, 'pinned' => true );
+			}
+		};
+		$row = static function () use ( $wpdb, $id ) {
+			return $wpdb->get_row( $wpdb->prepare( "SELECT coverage, coverage_reason, final_url FROM {$wpdb->prefix}mltsa_run_urls WHERE run_id = %d AND url LIKE %s", $id, '%s1-old%' ), ARRAY_A );
+		};
+		for ( $slice = 1; $slice <= 4; $slice++ ) {
+			Worker::tick( 1, new Worker( $client, static function () {} ) );
+			$now = $row();
+			if ( 1 === $slice ) {
+				$next = wp_next_scheduled( Scheduler::WORKER_HOOK );
+				icheck( $next && $next <= time(), 'A slice cut short queues the next worker event at once: ' . ( $next ? $next - time() : 'none' ) );
+			}
+			if ( $now && 'pending' !== $now['coverage'] ) {
+				break;
+			}
+		}
+		$hops = count( array_filter( $client->log, static function ( $url ) { return false !== strpos( $url, 's1-old' ); } ) );
+		icheck( $now && 'pending' !== $now['coverage'] && false !== strpos( (string) $now['final_url'], 's1-new' ), 'Read through the redirect: ' . wp_json_encode( $now ) );
+		icheck( 1 === $hops, 'The first hop is requested once: ' . implode( ',', $client->log ) );
+		finish_active_runs();
+		Scheduler::clear_worker();
 	}
 );
 
