@@ -169,7 +169,7 @@ class Exporter {
 			$rows[] = array( 'Pages: ' . Labels::of( Labels::COVERAGE, $state ), (int) $n );
 		}
 		foreach ( isset( $summary['resource_checks'] ) ? (array) $summary['resource_checks'] : array() as $key => $n ) {
-			$rows[] = array( 'Images and logos: ' . Labels::of( Labels::RESOURCE_CHECKS, $key ), (int) $n );
+			$rows[] = array( 'Images, logos and profile links: ' . Labels::of( Labels::RESOURCE_CHECKS, $key ), (int) $n );
 		}
 		if ( isset( $summary['repeat_unavailable'] ) && is_array( $summary['repeat_unavailable'] ) ) {
 			$repeat = $summary['repeat_unavailable'];

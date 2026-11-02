@@ -594,7 +594,8 @@ class Worker {
 	}
 
 	/**
-	 * Check each distinct own-host image and logo once (URL-004).
+	 * Check each distinct own-host image, logo and sameAs profile link once
+	 * (URL-004 and URL-008).
 	 *
 	 * @param array $run      Run.
 	 * @param float $deadline Deadline.
@@ -628,12 +629,15 @@ class Worker {
 				$summary['resource_index']         = $index;
 				$summary['resources_broken']       = $broken;
 				$this->save_run( (int) $run['id'], array( 'summary' => (string) wp_json_encode( $summary ) ) );
-				$result = $fetcher->fetch( $url, 'HEAD', true, $deadline );
+				// A sameAs profile link is a page: the normal page policy, not
+				// the wider static-file policy images and files use.
+				$is_file = SiteRules::is_file_check( $resources[ $url ] );
+				$result  = $fetcher->fetch( $url, 'HEAD', $is_file, $deadline );
 				if ( $result['attempts'] > 0 ) {
 					++$this->requests;
 				}
 				if ( in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
-					$result = $fetcher->fetch( $url, 'GET', true, $deadline );
+					$result = $fetcher->fetch( $url, 'GET', $is_file, $deadline );
 					if ( $result['attempts'] > 0 ) {
 						++$this->requests;
 					}

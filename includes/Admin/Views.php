@@ -240,13 +240,13 @@ class Views {
 		}
 		if ( ! empty( $summary['resource_checks'] ) ) {
 			$checks = (array) $summary['resource_checks'];
-			echo '<h3>' . esc_html__( 'Images and logos on this site', 'mlt-schema-audit' ) . '</h3><ul class="mltsa-list">';
+			echo '<h3>' . esc_html__( 'Images, logos and profile links on this site', 'mlt-schema-audit' ) . '</h3><ul class="mltsa-list">';
 			foreach ( Labels::RESOURCE_CHECKS as $key => $label ) {
 				echo '<li>' . esc_html( $label . ': ' . ( isset( $checks[ $key ] ) ? (int) $checks[ $key ] : 0 ) ) . '</li>';
 			}
 			echo '</ul>';
 			if ( isset( $checks['checked'], $checks['referenced'] ) && (int) $checks['checked'] < (int) $checks['referenced'] ) {
-				echo '<p class="description">' . esc_html__( 'An image that was not checked (blocked, timed out, unavailable or over the per-audit limit) cannot show that a broken image was fixed, so its issue stays open.', 'mlt-schema-audit' ) . '</p>';
+				echo '<p class="description">' . esc_html__( 'An image or link that was not checked (blocked, timed out, unavailable or over the per-audit limit) cannot show that it was fixed, so its issue stays open.', 'mlt-schema-audit' ) . '</p>';
 			}
 		}
 		if ( isset( $summary['repeat_unavailable'] ) && is_array( $summary['repeat_unavailable'] ) ) {

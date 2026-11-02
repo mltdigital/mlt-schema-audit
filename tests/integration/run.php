@@ -778,6 +778,63 @@ itest(
 );
 
 itest(
+	'Owner decision 2026-11-02: an own-host sameAs link is checked as a page (URL-008), an image as a file (URL-004)',
+	static function () use ( $admin ) {
+		finish_active_runs();
+		reset_settings( array( 'timeout' => 15 ) );
+		global $wpdb;
+		$repo    = new Repository();
+		$id      = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		$link    = home_url( '/team/gone-person/' );
+		$pdf     = home_url( '/wp-content/uploads/profile.pdf' );
+		$image   = home_url( '/wp-content/uploads/gone-logo.png' );
+		$where   = static function ( $prop ) {
+			return array(
+				array(
+					'url_id' => 0,
+					'prop'   => $prop,
+					'path'   => "$['" . $prop . "']",
+					'block'  => 0,
+				),
+			);
+		};
+		$summary = array(
+			'resources' => array(
+				$link  => $where( 'sameAs' ),
+				$pdf   => $where( 'sameAs' ),
+				$image => $where( 'logo' ),
+			),
+		);
+		$repo->update_run( $id, array( 'state' => 'running', 'phase' => 'resources', 'summary' => (string) wp_json_encode( $summary ) ) );
+		$client = new class() implements MLT\SchemaAudit\Engine\HttpClient {
+			public $seen = array();
+			public function request( $url, $pinned_ip, array $args ) {
+				$this->seen[] = $args['method'] . ' ' . $url;
+				return array( 'status' => 404, 'error_code' => '', 'error' => '', 'headers' => array(), 'body' => '', 'truncated' => false, 'pinned' => true );
+			}
+		};
+		// The outcomes are dropped from the summary after reconcile, so keep
+		// the last summary the resource step wrote.
+		$written = '';
+		$capture = static function ( $query ) use ( &$written ) {
+			if ( false !== strpos( $query, 'resource_outcomes' ) && false === strpos( $query, 'resource_attempts' ) ) {
+				$written = $query;
+			}
+			return $query;
+		};
+		add_filter( 'query', $capture );
+		( new Worker( $client, static function () {} ) )->process( $id, 5 );
+		remove_filter( 'query', $capture );
+		icheck( array( 'HEAD ' . $link, 'HEAD ' . $image ) === $client->seen, 'Requests: ' . wp_json_encode( $client->seen ) );
+		icheck( 2 === substr_count( $written, 'not_found' ), 'The link and the image answered 404: ' . $written );
+		icheck( 1 === substr_count( $written, 'blocked' ), 'A sameAs link into /wp-content/ is refused by the page policy, not fetched as a file' );
+		$rules = $wpdb->get_col( $wpdb->prepare( 'SELECT CONCAT(rule_id, \' \', observed) FROM ' . Installer::table( 'occurrences' ) . ' WHERE run_id = %d ORDER BY rule_id', $id ) );
+		icheck( array( 'URL-004 ' . $image, 'URL-008 ' . $link ) === $rules, 'Findings: ' . wp_json_encode( $rules ) );
+		finish_active_runs();
+	}
+);
+
+itest(
 	'F4 review 2026-10-30: a tick that dies part way still leaves a worker event queued, after the lock expires',
 	static function () use ( $admin ) {
 		finish_active_runs();

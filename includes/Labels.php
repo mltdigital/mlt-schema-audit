@@ -101,7 +101,7 @@ class Labels {
 	);
 
 	/**
-	 * Image and logo check counts in the run summary.
+	 * Image, logo and profile link check counts in the run summary.
 	 */
 	const RESOURCE_CHECKS = array(
 		'referenced' => 'Used by the pages read',

@@ -1,8 +1,9 @@
 <?php
 /**
  * Rules that need the whole run: one business @id with different details on
- * different pages (SITE-001), and own-host images that return 404 or 410
- * (URL-004).
+ * different pages (SITE-001), own-host images that return 404 or 410
+ * (URL-004), and own-host sameAs profile links that return 404 or 410
+ * (URL-008).
  *
  * @package MLT\SchemaAudit
  */
@@ -328,18 +329,17 @@ class SiteRules {
 	}
 
 	/**
-	 * Distinct own-host resources across the run, capped.
+	 * Distinct own-host resources across the run, capped: images and files
+	 * (URL-004) and sameAs profile links (URL-008) share one budget.
 	 *
-	 * @param array $pages run_url_id => site facts (resources key used).
+	 * @param array $pages run_url_id => site facts (resources and profile_links keys used).
 	 * @return array url => list of { url_id, prop, path, block }
 	 */
 	public static function resources( array $pages ) {
 		$out = array();
 		foreach ( $pages as $url_id => $facts ) {
-			if ( empty( $facts['resources'] ) ) {
-				continue;
-			}
-			foreach ( $facts['resources'] as $url => $where ) {
+			foreach ( self::page_resources( $facts ) as $pair ) {
+				list( $url, $where ) = $pair;
 				if ( ! isset( $out[ $url ] ) && count( $out ) >= self::MAX_RESOURCES ) {
 					continue;
 				}
@@ -350,7 +350,47 @@ class SiteRules {
 	}
 
 	/**
-	 * URL-004 finding for one broken resource on one page.
+	 * One page's own-host resources and profile links, as [ url, where ] pairs.
+	 * Facts stored before profile links were kept have no profile_links key.
+	 *
+	 * @param array $facts Site facts for one page.
+	 * @return array
+	 */
+	private static function page_resources( $facts ) {
+		$facts = (array) $facts;
+		$out   = array();
+		foreach ( array( 'resources', 'profile_links' ) as $key ) {
+			if ( empty( $facts[ $key ] ) || ! is_array( $facts[ $key ] ) ) {
+				continue;
+			}
+			foreach ( $facts[ $key ] as $url => $where ) {
+				$out[] = array( (string) $url, (array) $where );
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Whether a resource is requested as a static file (the wider resource
+	 * path policy) rather than as a page. Only when every reference is an
+	 * image or file; a URL any page cites as a sameAs link is requested
+	 * under the normal page policy.
+	 *
+	 * @param array $where_list References from resources().
+	 * @return bool
+	 */
+	public static function is_file_check( array $where_list ) {
+		foreach ( $where_list as $where ) {
+			if ( isset( $where['prop'] ) && 'sameAs' === $where['prop'] ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * URL-004 finding for one broken resource on one page, or URL-008 when
+	 * the reference is a sameAs profile link.
 	 *
 	 * @param string $url    Resource URL.
 	 * @param array  $where  { prop, path, block }.
@@ -358,9 +398,10 @@ class SiteRules {
 	 * @return array
 	 */
 	public static function broken_resource( $url, array $where, $status ) {
-		$rule = Rules::get( 'URL-004' );
+		$rule_id = ( isset( $where['prop'] ) && 'sameAs' === $where['prop'] ) ? 'URL-008' : 'URL-004';
+		$rule    = Rules::get( $rule_id );
 		return array(
-			'rule_id'           => 'URL-004',
+			'rule_id'           => $rule_id,
 			'rule_version'      => (int) $rule['version'],
 			'outcome'           => 'fail',
 			'severity'          => $rule['severity'],
@@ -383,8 +424,9 @@ class SiteRules {
 	/**
 	 * Evidence behind each site-wide issue in this run: the pages whose facts
 	 * the finding rests on (every page carrying the entity, not only the
-	 * page that differs) and, for URL-004, the resource itself. The issue
-	 * register clears a site-wide issue only when all of it is read again.
+	 * page that differs) and, for URL-004 and URL-008, the resource itself.
+	 * The issue register clears a site-wide issue only when all of it is
+	 * read again.
 	 *
 	 * @param array $pages run_url_id => site facts.
 	 * @param array $urls  run_url_id => URL.
@@ -425,14 +467,15 @@ class SiteRules {
 	 * the cap, or the check did not finish) is "unchecked", which holds any
 	 * issue that rests on it.
 	 *
-	 * @param array $pages    run_url_id => site facts (resources key used).
+	 * @param array $pages    run_url_id => site facts (resources and profile_links keys used).
 	 * @param array $outcomes Resource URL => fetch outcome, from the check.
 	 * @return array url => outcome
 	 */
 	public static function resource_outcomes( array $pages, array $outcomes ) {
 		$out = array();
 		foreach ( $pages as $facts ) {
-			foreach ( isset( $facts['resources'] ) ? array_keys( (array) $facts['resources'] ) : array() as $url ) {
+			foreach ( self::page_resources( $facts ) as $pair ) {
+				$url         = $pair[0];
 				$out[ $url ] = isset( $outcomes[ $url ] ) ? (string) $outcomes[ $url ] : 'unchecked';
 			}
 		}
@@ -440,9 +483,10 @@ class SiteRules {
 	}
 
 	/**
-	 * Image and logo check counts for the run summary: referenced by a page
-	 * read, attempted (not over the cap or left unfinished), checked (an
-	 * answer received: found, 404 or 410) and broken (404 or 410).
+	 * Image, file and profile link check counts for the run summary:
+	 * referenced by a page read, attempted (not over the cap or left
+	 * unfinished), checked (an answer received: found, 404 or 410) and
+	 * broken (404 or 410).
 	 *
 	 * @param array $outcomes Resource URL => outcome, from resource_outcomes().
 	 * @return array

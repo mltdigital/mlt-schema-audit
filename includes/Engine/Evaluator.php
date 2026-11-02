@@ -1685,16 +1685,17 @@ class Evaluator {
 	}
 
 	/**
-	 * Facts kept per page for site-wide rules: business entities by @id and
-	 * own-host resources cited as images or logos.
+	 * Facts kept per page for site-wide rules: business entities by @id,
+	 * own-host resources cited as images or logos, and own-host sameAs links.
 	 *
 	 * @return array
 	 */
 	private function site_facts() {
-		$entities  = array();
-		$resources = array();
-		$ids       = array();
-		$named     = array();
+		$entities      = array();
+		$resources     = array();
+		$profile_links = array();
+		$ids           = array();
+		$named         = array();
 		foreach ( $this->graph->nodes as $node ) {
 			if ( $node['is_ref'] ) {
 				continue;
@@ -1734,8 +1735,8 @@ class Evaluator {
 					}
 				}
 			}
-			// Files only: URL-004 reports a broken image or file. An own-host
-			// sameAs link is a page, not a file, so it is not checked here.
+			// Files (URL-004): a broken image or file. An own-host sameAs link
+			// is a page, so it is kept apart and checked as a page (URL-008).
 			foreach ( array( 'image', 'logo', 'contentUrl', 'thumbnailUrl' ) as $prop ) {
 				if ( ! isset( $node['props'][ $prop ] ) ) {
 					continue;
@@ -1753,13 +1754,29 @@ class Evaluator {
 					}
 				}
 			}
+			// Own-host sameAs links only: other hosts are never requested.
+			if ( isset( $node['props']['sameAs'] ) ) {
+				$values = Graph::is_list( $node['props']['sameAs'] ) ? $node['props']['sameAs'] : array( $node['props']['sameAs'] );
+				foreach ( $values as $value ) {
+					$url  = is_string( $value ) ? trim( $value ) : '';
+					$host = strtolower( (string) parse_url( $url, PHP_URL_HOST ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+					if ( '' !== $url && $this->is_own_host( $host ) && ! isset( $profile_links[ $url ] ) ) {
+						$profile_links[ $url ] = array(
+							'prop'  => 'sameAs',
+							'path'  => $node['path'] . "['sameAs']",
+							'block' => $node['block'],
+						);
+					}
+				}
+			}
 		}
 		return array(
-			'entities'  => $entities,
-			'resources' => $resources,
-			'ids'       => array_keys( $ids ),
-			'refs'      => $this->refs,
-			'named'     => $named,
+			'entities'      => $entities,
+			'resources'     => $resources,
+			'profile_links' => $profile_links,
+			'ids'           => array_keys( $ids ),
+			'refs'          => $this->refs,
+			'named'         => $named,
 		);
 	}
 
