@@ -558,7 +558,7 @@ class Extractor {
 	 */
 	public static function tel_links( $html ) {
 		$found = array();
-		// A quoted href runs to its closing quote, so "tel:01294 464341" keeps
+		// A quoted href runs to its closing quote, so "tel:01632 960123" keeps
 		// the digits after the space; an unquoted one ends at whitespace.
 		if ( preg_match_all( '/href\s*=\s*(?:"\s*(?:tel|callto):([^"]*)"|\'\s*(?:tel|callto):([^\']*)\'|(?:tel|callto):([^\s>]+))/i', (string) $html, $m, PREG_SET_ORDER ) ) {
 			foreach ( $m as $match ) {

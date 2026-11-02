@@ -246,7 +246,7 @@ mltsa_test(
 			foreach ( $numbers[0] as $number ) {
 				$digits = preg_replace( '/\D/', '', $number );
 				$digits = preg_replace( '/^44/', '0', $digits );
-				check( 0 === strpos( $digits, '01632' ) || 0 === strpos( $digits, '0808157' ), basename( $file ) . " has a non-fictional number {$number}" );
+				check( 0 === strpos( $digits, '01632960' ) || 0 === strpos( $digits, '0808157' ), basename( $file ) . " has a number outside the Ofcom drama ranges {$number}" );
 			}
 		}
 	}

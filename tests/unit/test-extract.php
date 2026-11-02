@@ -282,12 +282,12 @@ mltsa_test(
 mltsa_test(
 	'Review BUG-2: FACT-006 evidence shows approved numbers with the leading zero staff know',
 	static function () {
-		$html = '<script type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService","name":"X","telephone":"0141 555 0199"}</script>';
-		$out  = audit_html( $html, 'https://www.example-legal.co.uk/', array( 'approved_phones' => array( '1294464341', '1415550100' ) ) );
+		$html = '<script type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService","name":"X","telephone":"0141 496 0199"}</script>';
+		$out  = audit_html( $html, 'https://www.example-legal.co.uk/', array( 'approved_phones' => array( '1632960123', '1414960100' ) ) );
 		$hits = array_values( array_filter( $out['findings'], static function ( $f ) { return 'FACT-006' === $f['rule_id']; } ) );
 		check_same( 1, count( $hits ), 'FACT-006 reported for a number outside the approved list' );
-		check_same( 'Approved: 01294464341, 01415550100', $hits[0]['comparison'], 'approved numbers shown with the leading zero' );
-		$out2 = audit_html( $html, 'https://www.example-legal.co.uk/', array( 'approved_phones' => array( '1415550199' ) ) );
+		check_same( 'Approved: 01632960123, 01414960100', $hits[0]['comparison'], 'approved numbers shown with the leading zero' );
+		$out2 = audit_html( $html, 'https://www.example-legal.co.uk/', array( 'approved_phones' => array( '1414960199' ) ) );
 		check( ! in_array( 'FACT-006', rule_ids( $out2['findings'] ), true ), 'matching is unchanged: an approved number is not flagged' );
 	}
 );
