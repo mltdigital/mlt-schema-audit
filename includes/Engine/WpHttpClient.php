@@ -155,8 +155,12 @@ class WpHttpClient implements HttpClient {
 
 		$result['status']    = (int) wp_remote_retrieve_response_code( $response );
 		$result['headers']   = $headers;
+		// A HEAD response has no body: its Content-Length is the file's size,
+		// not bytes received, so it never makes the response "too large"
+		// (branch review R3). The cap applies to GET bodies.
+		$is_head             = isset( $args['method'] ) && 'HEAD' === strtoupper( (string) $args['method'] );
 		$result['truncated'] = strlen( $body ) > $cap
-			|| ( isset( $headers['content-length'] ) && (int) $headers['content-length'] > $cap );
+			|| ( ! $is_head && isset( $headers['content-length'] ) && (int) $headers['content-length'] > $cap );
 		$result['body']      = strlen( $body ) > $cap ? substr( $body, 0, $cap ) : $body;
 		return $result;
 	}

@@ -8,6 +8,7 @@
 // phpcs:disable
 
 use MLT\SchemaAudit\Discovery;
+use MLT\SchemaAudit\Engine\Comparator;
 use MLT\SchemaAudit\Engine\Fetcher;
 use MLT\SchemaAudit\Engine\UrlPolicy;
 
@@ -372,5 +373,23 @@ mltsa_test(
 
 		$client->requests = array();
 		check_same( array( 'https://www.example-legal.co.uk/slow-a/', 'https://www.example-legal.co.uk/news/a/' ), array_column( Discovery::from_sitemaps( $fetcher, $policy ), 'url' ), 'one-call discovery unchanged without a deadline' );
+	}
+);
+
+mltsa_test(
+	'Branch review R3: a HEAD answer for a file over the size cap shows the file exists; the cap applies to GET bodies',
+	static function () {
+		$url    = 'https://www.example-legal.co.uk/wp-content/uploads/2026/brochure.pdf';
+		$client = new Scripted_Client();
+		$client->responses[ $url ] = array( 'status' => 200, 'headers' => array( 'content-type' => 'application/pdf', 'content-length' => '12582912' ), 'body' => '', 'truncated' => true );
+		$head = mltsa_fetcher( $client )->fetch( $url, 'HEAD', true );
+		check_same( 'ok', $head['outcome'], 'HEAD 200 on a 12 MB file' );
+		check_same( 200, $head['status'], 'status kept' );
+		check_same( 'read', Comparator::evidence_state( array( 'firm.example', 'resource:' . $url ), array( 'firm.example' => 'ok' ), array( $url => $head['outcome'] ) ), 'URL-004 evidence settles' );
+		$client->responses[ $url ]['body'] = str_repeat( 'a', 10 );
+		$get = mltsa_fetcher( $client )->fetch( $url, 'GET', true );
+		check_same( 'too_large', $get['outcome'], 'A GET body over the cap is still too large' );
+		$client->responses[ $url ]['status'] = 404;
+		check_same( 'not_found', mltsa_fetcher( $client )->fetch( $url, 'HEAD', true )['outcome'], 'A missing file is still not found' );
 	}
 );

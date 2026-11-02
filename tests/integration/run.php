@@ -1610,6 +1610,57 @@ itest(
 	}
 );
 
+itest(
+	'Branch review R3: a real HEAD of a static file over the size cap is ok, not too large; a GET of it still is',
+	static function () use ( $admin ) {
+		$dir  = wp_upload_dir()['basedir'];
+		$file = $dir . '/mltsa-r3-brochure.pdf';
+		wp_mkdir_p( $dir );
+		file_put_contents( $file, str_repeat( 'a', 6000000 ) );
+		try {
+			$url     = content_url( '/uploads/mltsa-r3-brochure.pdf' );
+			$policy  = new MLT\SchemaAudit\Engine\UrlPolicy( home_url( '/' ), true );
+			$fetcher = new MLT\SchemaAudit\Engine\Fetcher( $policy, new MLT\SchemaAudit\Engine\WpHttpClient(), array( 'timeout' => 20, 'user_agent' => 'mltsa-test' ), static function () {} );
+			$head    = $fetcher->fetch( $url, 'HEAD', true );
+			icheck( 'ok' === $head['outcome'] && 200 === (int) $head['status'], 'HEAD: ' . $head['outcome'] . ' ' . $head['status'] . ' ' . $head['reason'] );
+			icheck( 6000000 === (int) $head['headers']['content-length'], 'Server sent the file size: ' . $head['headers']['content-length'] );
+			$get = $fetcher->fetch( $url, 'GET', true );
+			icheck( 'too_large' === $get['outcome'], 'GET body over the cap: ' . $get['outcome'] );
+		} finally {
+			unlink( $file );
+		}
+
+		// A server that refuses HEAD: the GET fallback's 2xx shows the file
+		// exists, so its body size does not hold the check.
+		finish_active_runs();
+		reset_settings( array( 'timeout' => 15 ) );
+		$repo  = new Repository();
+		$id    = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		$image = home_url( '/wp-content/uploads/r3-big-logo.png' );
+		$repo->update_run( $id, array( 'state' => 'running', 'phase' => 'resources', 'summary' => (string) wp_json_encode( array( 'resources' => array( $image => array( array( 'url_id' => 0, 'prop' => 'logo', 'path' => "$['logo']", 'block' => 0 ) ) ) ) ) ) );
+		$client = new class() implements MLT\SchemaAudit\Engine\HttpClient {
+			public function request( $url, $pinned_ip, array $args ) {
+				if ( 'HEAD' === $args['method'] ) {
+					return array( 'status' => 405, 'error_code' => '', 'error' => '', 'headers' => array(), 'body' => '', 'truncated' => false, 'pinned' => true );
+				}
+				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'image/png', 'content-length' => '9000000' ), 'body' => str_repeat( 'a', 100 ), 'truncated' => true, 'pinned' => true );
+			}
+		};
+		$written = '';
+		$capture = static function ( $query ) use ( &$written ) {
+			if ( false !== strpos( $query, 'resource_outcomes' ) && false === strpos( $query, 'resource_attempts' ) ) {
+				$written = $query;
+			}
+			return $query;
+		};
+		add_filter( 'query', $capture );
+		( new Worker( $client, static function () {} ) )->process( $id, 5 );
+		remove_filter( 'query', $capture );
+		icheck( false !== strpos( stripslashes( $written ), 'r3-big-logo.png":"ok"' ), 'GET fallback 200 over the cap recorded as ok: ' . substr( $written, 0, 300 ) );
+		finish_active_runs();
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }

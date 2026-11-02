@@ -161,7 +161,9 @@ class Fetcher {
 			$result['headers']      = $response['headers'];
 			$result['content_type'] = isset( $response['headers']['content-type'] ) ? strtolower( $response['headers']['content-type'] ) : '';
 
-			if ( ! empty( $response['truncated'] ) ) {
+			// The size cap applies to bodies: a HEAD answer has none, and a 2xx
+			// answer to it proves the file exists however large it is (R3).
+			if ( ! empty( $response['truncated'] ) && 'HEAD' !== $method ) {
 				return $this->finish( $result, 'too_large', 'response_over_' . (int) $this->limits['max_bytes'] . '_bytes', $started );
 			}
 			if ( 401 === $status || 403 === $status ) {

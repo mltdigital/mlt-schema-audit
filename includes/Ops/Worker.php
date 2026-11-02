@@ -706,6 +706,12 @@ class Worker {
 					if ( $result['attempts'] > 0 ) {
 						++$this->requests;
 					}
+					// The check asks only whether the file or page exists: a
+					// 2xx answer to the GET proves it, even with its body over
+					// the size cap (branch review R3).
+					if ( 'too_large' === $result['outcome'] && (int) $result['status'] >= 200 && (int) $result['status'] < 300 ) {
+						$result['outcome'] = 'ok';
+					}
 				}
 				if ( 'deferred' === $result['outcome'] ) {
 					// As for pages: only a deferral with the whole slice counts.
