@@ -34,7 +34,7 @@ Two code reviews on 30 October found defects to fix before any pilot. Fixed so f
 - Frozen URL list saved once (open check from fix 4): discovery saves the URL list in its last step and then moves the run on; a worker killed in between left the list saved and the run still in discovery, so the next attempt listed every URL again (6 rows for 3 URLs in the test), and each page was read twice. `run_urls` has no unique key. The list is now saved in one transaction that first removes any rows an earlier attempt left, so a retry gives one row per URL. No schema change.
 - Test data: telephone numbers in code comments, unit tests and three historical fixtures that were outside the Ofcom drama ranges (one may belong to a real business) are replaced with drama-range numbers (01632 960xxx, 0141 496 0xxx). The fixture check now accepts only the 01632 960xxx and 0808 157 0xxx drama ranges, not any 01632 number. Earlier commits are not rewritten.
 
-Still open: the remaining confirmed items of the second review that are not listed above (see `STATE.md` in the project folder).
+Still open: every item of both reviews is now fixed or answered (BUG-3 was checked and is not a defect: the size cap counts decompressed bytes; a test now holds that). For the owner to decide: own-host `sameAs` pages are not checked until a link rule is agreed, so pilot defect D44 is not detected; a page of exactly 5,242,880 bytes is reported as cut at the size cap; the www or bare form of a public site on a non-standard port is still refused by WordPress's own port rule. Not verified on MySQL or MariaDB: the database upgrade and the transaction around the frozen URL list were tested on the SQLite development site only.
 
 ### Stage 7: documents and release build
 
