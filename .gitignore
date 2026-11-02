@@ -5,3 +5,4 @@ dist/
 *.zip
 .DS_Store
 .phpcs-cache
+repo-source.txt
