@@ -108,7 +108,7 @@ class SiteRules {
 			if ( count( $ids ) < 2 ) {
 				continue;
 			}
-			$ids = self::by_count_desc( $ids );
+			$ids   = self::by_count_desc( $ids );
 			$names = array_keys( $ids );
 			$main  = (string) $names[0];
 			foreach ( array_slice( $names, 1 ) as $other ) {
@@ -163,7 +163,7 @@ class SiteRules {
 				if ( count( $values ) < 2 ) {
 					continue;
 				}
-				$values = self::by_count_desc( $values );
+				$values  = self::by_count_desc( $values );
 				$keys    = array_keys( $values );
 				$common  = (string) $keys[0];
 				$support = array();
@@ -275,7 +275,7 @@ class SiteRules {
 				}
 				// Most common value is the comparison; every page with a
 				// different value gets an occurrence of one site-wide issue.
-				$values = self::by_count_desc( $values );
+				$values  = self::by_count_desc( $values );
 				$keys    = array_keys( $values );
 				$common  = (string) $keys[0];
 				$display = array(
