@@ -248,7 +248,9 @@ class Discovery {
 			// Permalinks WordPress generated itself keep their query string, so
 			// plain permalinks (?p=12) work; the request policy still refuses
 			// action, nonce and REST queries. Other sources lose it (F6).
-			$from_wp = 'home' === $c['source'] || 0 === strpos( (string) $c['source'], 'post:' );
+			// Recheck URLs come from the register, so they were frozen once
+			// already and any query left on them is one kept here before.
+			$from_wp = in_array( (string) $c['source'], array( 'home', 'recheck' ), true ) || 0 === strpos( (string) $c['source'], 'post:' );
 			$url     = $from_wp ? (string) preg_replace( '/#.*$/s', '', trim( (string) $c['url'] ) ) : self::clean( (string) $c['url'] );
 			$key     = Evaluator::url_key( $url );
 			if ( '' === $url || isset( $keys[ $key ] ) ) {

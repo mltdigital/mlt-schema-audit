@@ -216,6 +216,31 @@ mltsa_test(
 );
 
 mltsa_test(
+	'Review fix 6: a recheck keeps a stored permalink query; the request policy still applies',
+	static function () {
+		$policy = new UrlPolicy( 'https://www.firm.example/', false, static function () {
+			return array( '203.0.113.10' );
+		} );
+		$cands  = array();
+		foreach ( array( 'https://www.firm.example/?p=12#top', 'https://www.firm.example/?page_id=7', 'https://www.firm.example/?rest_route=/wp/v2/users', 'https://www.firm.example/about/' ) as $u ) {
+			$cands[] = array( 'url' => $u, 'source' => 'recheck', 'post_id' => 0, 'exclude' => '' );
+		}
+		$frozen  = Discovery::freeze( $cands, $policy, 2000 );
+		$pending = array();
+		$reasons = array();
+		foreach ( $frozen['urls'] as $u ) {
+			if ( 'pending' === $u['coverage'] ) {
+				$pending[] = $u['url'];
+			} else {
+				$reasons[] = $u['reason'];
+			}
+		}
+		check_same( array( 'https://www.firm.example/?p=12', 'https://www.firm.example/?page_id=7', 'https://www.firm.example/about/' ), $pending, 'Plain permalinks are rechecked as stored, not as the home page' );
+		check( 1 === count( $reasons ) && '' !== $reasons[0], 'A REST query is still refused on recheck' );
+	}
+);
+
+mltsa_test(
 	'AC scope: the URL cap records the rest as excluded, and a sitemap index lists child sitemaps',
 	static function () {
 		$policy = new UrlPolicy( 'https://www.firm.example/', false, static function () {
