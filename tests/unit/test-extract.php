@@ -262,3 +262,19 @@ mltsa_test(
 		check_same( array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), $combine->invoke( null, array( '@type' => 'PostalAddress', 'postalCode' => 'G1 1AA' ), array( 'postalCode' => 'G1 1AA', '@type' => 'PostalAddress' ) ), 'Same object in a different key order is one value' );
 	}
 );
+
+mltsa_test(
+	'Review BUG-1: extra staging hosts are matched as whole hosts, with subdomains, and are not regexes',
+	static function () {
+		$page = static function ( $host ) {
+			return '<script type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService","name":"X","image":"https://' . $host . '/logo.png"}</script>';
+		};
+		$ctx  = array( 'staging_patterns' => array( 'preview.partner-agency.co.uk', 'build.example-dev.net' ) );
+		check( in_array( 'URL-001', rule_ids( audit_html( $page( 'preview.partner-agency.co.uk' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'stored host matches itself' );
+		check( in_array( 'URL-001', rule_ids( audit_html( $page( 'a.preview.partner-agency.co.uk' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'a subdomain of the stored host matches, as the built-in suffix patterns do' );
+		check( ! in_array( 'URL-001', rule_ids( audit_html( $page( 'xpreview.partner-agency.co.uk' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'a longer host that merely ends with the text does not match' );
+		check( ! in_array( 'URL-001', rule_ids( audit_html( $page( 'buildxexample-dev.net' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'the dot is literal, not a wildcard' );
+		check( ! in_array( 'URL-001', rule_ids( audit_html( $page( 'cdn.example.org' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'unrelated host not flagged' );
+		check( in_array( 'URL-001', rule_ids( audit_html( $page( 'staging.example.org' ), 'https://www.example-legal.co.uk/', $ctx )['findings'] ), true ), 'built-in patterns still work alongside' );
+	}
+);

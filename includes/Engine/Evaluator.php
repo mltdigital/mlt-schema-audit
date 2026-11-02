@@ -108,7 +108,7 @@ class Evaluator {
 	/**
 	 * Constructor.
 	 *
-	 * @param array $context { page_url, own_hosts, home_scheme, staging_patterns (extra regexes),
+	 * @param array $context { page_url, own_hosts, home_scheme, staging_patterns (extra hosts),
 	 *                         approved_phones (NSNs), approved_names }.
 	 */
 	public function __construct( array $context ) {
@@ -469,12 +469,37 @@ class Evaluator {
 	}
 
 	/**
+	 * Built-in staging patterns plus the staff-entered extra hosts.
+	 *
+	 * Extra entries are stored as plain hosts (Settings::sanitise keeps letters, digits, dots and
+	 * hyphens), so each is quoted and anchored to the whole host. Like the built-in suffix patterns,
+	 * a host also covers its subdomains. Returns pattern => label for the evidence text.
+	 *
+	 * @param array $extra Staff-entered hosts.
+	 * @return array
+	 */
+	private static function staging_patterns( array $extra ) {
+		$out = array();
+		foreach ( self::STAGING_PATTERNS as $pattern ) {
+			$out[ $pattern ] = $pattern;
+		}
+		foreach ( $extra as $entry ) {
+			$host = trim( strtolower( (string) $entry ), ". \t\n\r" );
+			if ( '' === $host ) {
+				continue;
+			}
+			$out[ '/(^|\\.)' . preg_quote( $host, '/' ) . '$/' ] = 'the extra staging host ' . $host;
+		}
+		return $out;
+	}
+
+	/**
 	 * URLs and resources.
 	 *
 	 * @param string $canonical Canonical link href.
 	 */
 	private function url_rules( $canonical ) {
-		$patterns = array_merge( self::STAGING_PATTERNS, (array) $this->ctx['staging_patterns'] );
+		$patterns = self::staging_patterns( (array) $this->ctx['staging_patterns'] );
 		$seen     = array();
 		foreach ( $this->blocks as $block ) {
 			if ( ! is_array( $block['data'] ) || 'ok' !== $block['parse'] ) {
@@ -498,10 +523,10 @@ class Evaluator {
 						$this->add( 'URL-001', 'fail', 'high', $base + array( 'comparison' => 'The path names this site and continues into wp-content, so it is a copy of this site on another server.' ) );
 					}
 					if ( ! $this->is_own_host( $host ) && ! isset( $seen[ 'stg|' . $value ] ) ) {
-						foreach ( $patterns as $pattern ) {
-							if ( @preg_match( $pattern, $host ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Staff-entered patterns are validated on save; a bad one must not stop the run.
+						foreach ( $patterns as $pattern => $label ) {
+							if ( preg_match( $pattern, $host ) ) {
 								$seen[ 'stg|' . $value ] = true;
-								$this->add( 'URL-001', 'fail', 'high', $base + array( 'comparison' => 'Matches ' . $pattern ) );
+								$this->add( 'URL-001', 'fail', 'high', $base + array( 'comparison' => 'Matches ' . $label ) );
 								break;
 							}
 						}
