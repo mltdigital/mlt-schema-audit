@@ -1671,11 +1671,14 @@ itest(
 		$about = wp_insert_post( array( 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'R2 about', 'post_name' => 'r2-about', 'post_content' => 'x' ) );
 		$dup   = wp_insert_post( array( 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'R2 duplicate', 'post_name' => 'r2-old-duplicate', 'post_content' => 'x' ) );
 		$news  = wp_insert_post( array( 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'R2 news', 'post_name' => 'r2-news', 'post_content' => 'x' ) );
+		$moved = wp_insert_post( array( 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'S4 moved', 'post_name' => 's4-moved', 'post_content' => 'x' ) );
+		$heir  = 0;
 		$key   = static function ( $id ) {
 			return Evaluator::url_key( get_permalink( $id ) );
 		};
 		$refs_dup  = array( $key( $about ), $key( $dup ) );
 		$refs_news = array( $key( $about ), $key( $news ) );
+		$refs_move = array( $key( $about ), $key( $moved ) );
 		// Listed only by a sitemap in the past; sitemap discovery is now off.
 		$refs_map  = array( $key( $about ), Evaluator::url_key( home_url( '/r2-sitemap-only/' ) ) );
 		$version = Rules::fingerprint()['SITE-001'];
@@ -1698,7 +1701,7 @@ itest(
 				)
 			);
 		};
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ), sha1( 'mltsa-r2-map' ) ) );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s, %s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ), sha1( 'mltsa-r2-map' ), sha1( 'mltsa-s4-move' ) ) );
 		$client  = new class() implements MLT\SchemaAudit\Engine\HttpClient {
 			public function request( $url, $pinned_ip, array $args ) {
 				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'text/html' ), 'body' => '<html><head><title>x</title></head><body></body></html>', 'truncated' => false, 'pinned' => true );
@@ -1721,6 +1724,12 @@ itest(
 			// run history knows it as a post; then it is unpublished.
 			$audit();
 			wp_update_post( array( 'ID' => $dup, 'post_status' => 'draft' ) );
+			// Branch review S4: the page is deleted and a post, a type outside
+			// the audit settings, now has the same permalink.
+			wp_delete_post( $moved, true );
+			$heir = wp_insert_post( array( 'post_type' => 'post', 'post_status' => 'publish', 'post_title' => 'S4 heir', 'post_name' => 's4-moved', 'post_content' => 'x' ) );
+			icheck( $key( $heir ) === $refs_move[1], 'The post has the deleted page\'s URL: ' . $key( $heir ) );
+			$id_move = $make( 's4-move', $refs_move );
 			$id_dup  = $make( 'dup', $refs_dup );
 			$id_news = $make( 'news', $refs_news );
 			$id_map  = $make( 'map', $refs_map );
@@ -1730,6 +1739,7 @@ itest(
 			};
 			icheck( 'no_longer_detected' === $state( $id_dup ), 'Evidence page unpublished, the other read: cleared, ' . $state( $id_dup ) );
 			icheck( 'unavailable' === $state( $id_news ), 'Evidence page still published but outside the post types: held as unavailable, ' . $state( $id_news ) );
+			icheck( 'unavailable' === $state( $id_move ), 'Evidence page deleted but its URL now served by a post outside the post types: held, ' . $state( $id_move ) );
 			icheck( 'unavailable' === $state( $id_map ), 'Sitemap-only evidence URL, sitemap discovery off: held as unavailable, ' . $state( $id_map ) );
 			$why = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Installer::table( 'events' ) . " WHERE event_type = 'held_outside_scope' AND object_id IN (%d, %d)", $id_news, $id_map ) );
 			icheck( 2 === $why, 'Each has an event saying why it is held: ' . $why );
@@ -1741,7 +1751,11 @@ itest(
 			wp_delete_post( $about, true );
 			wp_delete_post( $dup, true );
 			wp_delete_post( $news, true );
-			$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ), sha1( 'mltsa-r2-map' ) ) );
+			wp_delete_post( $moved, true );
+			if ( $heir ) {
+				wp_delete_post( $heir, true );
+			}
+			$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE issue_key IN (%s, %s, %s, %s)", sha1( 'mltsa-r2-dup' ), sha1( 'mltsa-r2-news' ), sha1( 'mltsa-r2-map' ), sha1( 'mltsa-s4-move' ) ) );
 		}
 	}
 );

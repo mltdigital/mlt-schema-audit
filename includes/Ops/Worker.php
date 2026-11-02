@@ -1012,7 +1012,8 @@ class Worker {
 	/**
 	 * Evidence pages of active site-wide issues that a full-scope run did not
 	 * list and that an earlier run listed as a WordPress post which is no
-	 * longer published (unpublished, trashed or deleted). Such a page has
+	 * longer published (unpublished, trashed or deleted), with no other
+	 * published post at the same URL (branch review S4). Such a page has
 	 * left the site, so it settles its part of the evidence, as a page
 	 * answering 404 does. Anything else not listed is held: a page the run
 	 * excluded (URL cap, policy, password), a published post outside the
@@ -1041,12 +1042,27 @@ class Worker {
 					continue;
 				}
 				$post_id = $this->repo->last_post_id_for( $ref );
-				if ( $post_id && 'publish' !== get_post_status( $post_id ) ) {
+				if ( $post_id && 'publish' !== get_post_status( $post_id ) && ! self::url_still_published( $ref ) ) {
 					$gone[ $ref ] = true;
 				}
 			}
 		}
 		return $gone;
+	}
+
+	/**
+	 * Whether WordPress still serves a published post, of any post type, at
+	 * a URL key: a page deleted and replaced at the same permalink by a post
+	 * of a type the audit does not cover is held, not gone (branch review
+	 * S4).
+	 *
+	 * @param string $key URL key (Evaluator::url_key()).
+	 * @return bool
+	 */
+	private static function url_still_published( $key ) {
+		$scheme  = (string) wp_parse_url( home_url(), PHP_URL_SCHEME );
+		$post_id = url_to_postid( ( '' !== $scheme ? $scheme : 'https' ) . '://' . $key . ( false === strpos( $key, '?' ) ? '/' : '' ) );
+		return $post_id > 0 && 'publish' === get_post_status( $post_id );
 	}
 
 	/**
