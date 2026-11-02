@@ -115,7 +115,7 @@ class Discovery {
 	 * Starting state for stepped sitemap discovery.
 	 *
 	 * @param UrlPolicy $policy Policy.
-	 * @return array { queue, seen, out, read, deferrals, fetched, deferred, done }
+	 * @return array { queue, seen, out, read, not_read, deferrals, fetched, deferred, done }
 	 */
 	public static function sitemap_state( UrlPolicy $policy ) {
 		$base = $policy->home_scheme() . '://' . $policy->home_host();
@@ -124,6 +124,7 @@ class Discovery {
 			'seen'      => array(),
 			'out'       => array(),
 			'read'      => 0,
+			'not_read'  => 0,
 			'deferrals' => 0,
 			'fetched'   => 0,
 			'deferred'  => false,
@@ -134,16 +135,20 @@ class Discovery {
 	/**
 	 * Read at most one sitemap, so a worker slice never holds more than one
 	 * sitemap request and a killed process loses at most that one (finding 4).
-	 * A fetch the deadline deferred stays at the front of the queue, up to
-	 * three times; after that the sitemap counts as read and failed.
+	 * A fetch the deadline deferred stays at the front of the queue. Only a
+	 * deferral after a request made with the whole slice ($fair) counts; on
+	 * the third the sitemap counts as read and failed. A sitemap that could
+	 * not be read (other than not found or gone) is counted in not_read, so
+	 * the audit screen shows it (branch review R1).
 	 *
 	 * @param Fetcher   $fetcher  Fetcher.
 	 * @param UrlPolicy $policy   Policy.
 	 * @param array     $state    State from sitemap_state() or a previous step.
 	 * @param float     $deadline Unix time to finish by; 0 for none.
+	 * @param bool      $fair     Whether this step has the whole slice.
 	 * @return array New state.
 	 */
-	public static function sitemap_step( Fetcher $fetcher, UrlPolicy $policy, array $state, $deadline = 0.0 ) {
+	public static function sitemap_step( Fetcher $fetcher, UrlPolicy $policy, array $state, $deadline = 0.0, $fair = true ) {
 		$state['deferred'] = false;
 		if ( empty( $state['queue'] ) || $state['read'] >= self::MAX_SITEMAPS || count( $state['out'] ) >= self::MAX_SITEMAP_URLS ) {
 			$state['done'] = true;
@@ -159,7 +164,7 @@ class Discovery {
 			++$state['fetched'];
 		}
 		if ( 'deferred' === $result['outcome'] ) {
-			if ( $result['attempts'] > 0 ) {
+			if ( $result['attempts'] > 0 && $fair ) {
 				++$state['deferrals'];
 			}
 			if ( $state['deferrals'] < 3 ) {
@@ -172,6 +177,9 @@ class Discovery {
 		$state['deferrals']    = 0;
 		++$state['read'];
 		if ( 'ok' !== $result['outcome'] ) {
+			if ( ! in_array( $result['outcome'], array( 'not_found', 'gone' ), true ) ) {
+				$state['not_read'] = ( isset( $state['not_read'] ) ? (int) $state['not_read'] : 0 ) + 1;
+			}
 			return $state;
 		}
 		$base   = $policy->home_scheme() . '://' . $policy->home_host();

@@ -720,40 +720,96 @@ itest(
  */
 function timing_out_client() {
 	return new class() implements MLT\SchemaAudit\Engine\HttpClient {
-		public $count = 0;
+		public $count    = 0;
+		public $timeouts = array();
 		public function request( $url, $pinned_ip, array $args ) {
 			++$this->count;
+			$this->timeouts[] = (int) $args['timeout'];
 			return array( 'status' => 0, 'error_code' => 'timeout', 'error' => 'timed out', 'headers' => array(), 'body' => '', 'truncated' => false, 'pinned' => true );
 		}
 	};
 }
 
 itest(
-	'F4 review 2026-10-30: a page the budget cuts short stays pending, and three deferrals record budget_timeout',
+	'Branch review R1: with the audit screen\'s 8 second budget, a page that needs 10 seconds is read with the full timeout',
 	static function () use ( $admin ) {
 		finish_active_runs();
 		reset_settings( array( 'timeout' => 15 ) );
 		$repo   = new Repository();
 		$id     = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
-		$client = timing_out_client();
-		icheck( $id > 0, 'Recheck started' );
-		for ( $i = 1; $i <= 3; $i++ ) {
-			( new Worker( $client, static function () {} ) )->process( $id, 5 );
-			$row = $repo->pending_urls( $id, 5 );
-			if ( $i < 3 ) {
-				icheck( 1 === count( $row ) && $i === (int) $row[0]['attempts'], 'Still pending after deferral ' . $i );
+		$client = new class() implements MLT\SchemaAudit\Engine\HttpClient {
+			public $timeouts = array();
+			public function request( $url, $pinned_ip, array $args ) {
+				$this->timeouts[] = (int) $args['timeout'];
+				if ( $args['timeout'] < 10 ) {
+					return array( 'status' => 0, 'error_code' => 'timeout', 'error' => 'timed out', 'headers' => array(), 'body' => '', 'truncated' => false, 'pinned' => true );
+				}
+				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'text/html' ), 'body' => '<html><head><title>Slow</title></head><body></body></html>', 'truncated' => false, 'pinned' => true );
 			}
-		}
-		icheck( 3 === $client->count, 'One request per slice: ' . $client->count );
+		};
+		icheck( $id > 0, 'Recheck started' );
+		// The audit screen's AJAX step calls process() with 8 seconds.
+		( new Worker( $client, static function () {} ) )->process( $id, 8 );
+		icheck( array( 15 ) === $client->timeouts, 'One request, sent the full timeout: ' . wp_json_encode( $client->timeouts ) );
 		global $wpdb;
-		$url = $wpdb->get_row( $wpdb->prepare( 'SELECT coverage, coverage_reason FROM ' . Installer::table( 'run_urls' ) . ' WHERE run_id = %d', $id ), ARRAY_A );
-		icheck( 'timeout' === $url['coverage'] && 'budget_timeout' === $url['coverage_reason'], 'Recorded: ' . wp_json_encode( $url ) );
+		$url = $wpdb->get_row( $wpdb->prepare( 'SELECT coverage, coverage_reason, attempts FROM ' . Installer::table( 'run_urls' ) . ' WHERE run_id = %d', $id ), ARRAY_A );
+		icheck( 'ok' === $url['coverage'], 'Read: ' . wp_json_encode( $url ) );
+		icheck( 17 === Worker::slice_budget( 8, 15 ) && 20 === Worker::slice_budget( 20, 15 ), 'A slice fits one full request plus 2 seconds' );
 		finish_active_runs();
 	}
 );
 
 itest(
-	'F4 review 2026-10-30: a file check the budget cuts short is retried in the next slice, then recorded as a timeout',
+	'Branch review R1: a timeout after the full timeout is recorded at once; a deferral counts only when the URL had the whole slice',
+	static function () use ( $admin ) {
+		global $wpdb;
+		finish_active_runs();
+		reset_settings( array( 'timeout' => 15 ) );
+		$repo   = new Repository();
+		$id     = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		$client = timing_out_client();
+		( new Worker( $client, static function () {} ) )->process( $id, 5 );
+		$url = $wpdb->get_row( $wpdb->prepare( 'SELECT coverage, coverage_reason FROM ' . Installer::table( 'run_urls' ) . ' WHERE run_id = %d', $id ), ARRAY_A );
+		icheck( 1 === $client->count && array( 15 ) === $client->timeouts, 'One request with the full timeout: ' . wp_json_encode( $client->timeouts ) );
+		icheck( 'timeout' === $url['coverage'] && 'timeout' === $url['coverage_reason'], 'Recorded as the site\'s timeout: ' . wp_json_encode( $url ) );
+		finish_active_runs();
+
+		// Timeout 5, so a slice is 7 seconds: a 503 leaves no room for the
+		// 2 second backoff and a full retry, so the page is deferred.
+		reset_settings( array( 'timeout' => 5 ) );
+		$busy   = home_url( '/r1-busy/' );
+		$id     = Scheduler::start_recheck( $admin, array( home_url( '/' ), $busy ) );
+		$client = new class() implements MLT\SchemaAudit\Engine\HttpClient {
+			public $busy = 0;
+			public function request( $url, $pinned_ip, array $args ) {
+				if ( false !== strpos( $url, 'r1-busy' ) ) {
+					++$this->busy;
+					return array( 'status' => 503, 'error_code' => '', 'error' => '', 'headers' => array(), 'body' => '', 'truncated' => false, 'pinned' => true );
+				}
+				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'text/html' ), 'body' => '<html></html>', 'truncated' => false, 'pinned' => true );
+			}
+		};
+		$row = static function () use ( $wpdb, $id ) {
+			return $wpdb->get_row( $wpdb->prepare( "SELECT coverage, coverage_reason, attempts FROM {$wpdb->prefix}mltsa_run_urls WHERE run_id = %d AND url LIKE %s", $id, '%r1-busy%' ), ARRAY_A );
+		};
+		( new Worker( $client, static function () {} ) )->process( $id, 5 );
+		$first = $row();
+		icheck( 1 === $client->busy && 'pending' === $first['coverage'] && 0 === (int) $first['attempts'], 'Deferred after another page in the slice: not counted ' . wp_json_encode( $first ) );
+		for ( $i = 1; $i <= 3; $i++ ) {
+			( new Worker( $client, static function () {} ) )->process( $id, 5 );
+			$now = $row();
+			if ( $i < 3 ) {
+				icheck( 'pending' === $now['coverage'] && $i === (int) $now['attempts'], 'Deferred with the whole slice: counted ' . $i . ' ' . wp_json_encode( $now ) );
+			}
+		}
+		icheck( 4 === $client->busy, 'One request per slice: ' . $client->busy );
+		icheck( 'error' === $now['coverage'] && 'budget_spent' === $now['coverage_reason'], 'Third counted deferral recorded: ' . wp_json_encode( $now ) );
+		finish_active_runs();
+	}
+);
+
+itest(
+	'Branch review R1: a file check is sent the full timeout and a timeout is recorded at once',
 	static function () use ( $admin ) {
 		finish_active_runs();
 		reset_settings( array( 'timeout' => 15 ) );
@@ -762,16 +818,11 @@ itest(
 		$image = home_url( '/wp-content/uploads/f4-logo.png' );
 		$repo->update_run( $id, array( 'state' => 'running', 'phase' => 'resources', 'summary' => (string) wp_json_encode( array( 'resources' => array( $image => array() ) ) ) ) );
 		$client = timing_out_client();
-		for ( $i = 1; $i <= 2; $i++ ) {
-			( new Worker( $client, static function () {} ) )->process( $id, 5 );
-			$run = $repo->get_run( $id );
-			icheck( 'resources' === $run['phase'], 'Still checking files after deferral ' . $i );
-		}
 		( new Worker( $client, static function () {} ) )->process( $id, 5 );
 		$run     = $repo->get_run( $id );
 		$summary = Repository::decode( $run['summary'] );
-		icheck( 3 === $client->count, 'One request per slice, three in all: ' . $client->count );
-		icheck( 1 === (int) $summary['resource_index'] && 'resources' !== $run['phase'], 'Moved past the file on the third deferral' );
+		icheck( 1 === $client->count && array( 15 ) === $client->timeouts, 'One request with the full timeout: ' . wp_json_encode( $client->timeouts ) );
+		icheck( 1 === (int) $summary['resource_index'] && 'resources' !== $run['phase'], 'Moved past the file' );
 		icheck( ! isset( $summary['resource_attempts'] ), 'Attempt counter cleared' );
 		finish_active_runs();
 	}
@@ -855,8 +906,10 @@ itest(
 			remove_filter( 'pre_http_request', $die );
 		}
 		$next = wp_next_scheduled( 'mltsa_worker' );
-		icheck( $next && $next >= $before + 5 + Worker::CONTINUATION_GRACE && $next <= time() + 5 + Worker::CONTINUATION_GRACE, 'Continuation queued after the budget and lock: ' . ( $next - $before ) );
-		icheck( 5 + 120 < Worker::CONTINUATION_GRACE + 5, 'Fires after the run lock (budget + 120 s) has expired' );
+		// The slice is raised to fit one full request (branch review R1): 17 s.
+		$slice = Worker::slice_budget( 5, 15 );
+		icheck( $next && $next >= $before + $slice + Worker::CONTINUATION_GRACE && $next <= time() + $slice + Worker::CONTINUATION_GRACE, 'Continuation queued after the budget and lock: ' . ( $next - $before ) );
+		icheck( $slice + 120 < Worker::CONTINUATION_GRACE + $slice, 'Fires after the run lock (budget + 120 s) has expired' );
 		icheck( wp_next_scheduled( 'mltsa_watchdog' ), 'Watchdog queued' );
 		finish_active_runs();
 		Scheduler::clear_worker();

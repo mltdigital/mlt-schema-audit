@@ -269,8 +269,12 @@ class Views {
 				echo '<p class="description">' . esc_html__( 'These findings could not be confirmed or cleared in several audits in a row, so part of the site is not being checked. Look at why their pages or images could not be read. This figure does not change their status.', 'mlt-schema-audit' ) . '</p>';
 			}
 		}
-		if ( ! empty( $scope['excluded_by_reason'] ) || ! empty( $scope['status_exclusions'] ) ) {
+		if ( ! empty( $scope['excluded_by_reason'] ) || ! empty( $scope['status_exclusions'] ) || ! empty( $scope['sitemaps_not_read'] ) ) {
 			echo '<h3>' . esc_html__( 'Left out, with reasons', 'mlt-schema-audit' ) . '</h3><ul class="mltsa-list">';
+			if ( ! empty( $scope['sitemaps_not_read'] ) ) {
+				/* translators: %d: number of sitemaps. */
+				echo '<li>' . esc_html( sprintf( __( 'Sitemaps that could not be read (their pages may be missing from this audit): %d', 'mlt-schema-audit' ), (int) $scope['sitemaps_not_read'] ) ) . '</li>';
+			}
 			foreach ( array_merge( (array) ( isset( $scope['excluded_by_reason'] ) ? $scope['excluded_by_reason'] : array() ), (array) ( isset( $scope['status_exclusions'] ) ? $scope['status_exclusions'] : array() ) ) as $reason => $n ) {
 				echo '<li>' . esc_html( str_replace( '_', ' ', $reason ) . ': ' . (int) $n ) . '</li>';
 			}
@@ -783,6 +787,11 @@ class Views {
 		echo '<h2>' . esc_html__( 'Limits and data', 'mlt-schema-audit' ) . '</h2>';
 		echo '<p><label>Seconds between requests <input type="number" name="gap_seconds" min="0" max="30" value="' . (int) $s['gap_seconds'] . '"></label> ';
 		echo '<label>Timeout per request (seconds) <input type="number" name="timeout" min="5" max="60" value="' . (int) $s['timeout'] . '"></label></p>';
+		$in_use = \MLT\SchemaAudit\Ops\Worker::request_timeout( $s['timeout'] );
+		if ( $in_use < (int) $s['timeout'] ) {
+			/* translators: 1: timeout setting, 2: PHP time limit, 3: timeout in use. */
+			echo '<div class="notice notice-warning inline"><p>' . esc_html( sprintf( __( 'The timeout is set to %1$d seconds, but this server\'s PHP time limit (%2$d seconds) leaves room for requests of at most %3$d seconds, so audit work done through WordPress cron or the open audit screen uses %3$d. Lower the setting, raise the PHP time limit, or run audits with the server cron job (wp mltsa tick), which uses the full setting.', 'mlt-schema-audit' ), (int) $s['timeout'], (int) ini_get( 'max_execution_time' ), $in_use ) ) . '</p></div>';
+		}
 		echo '<p><label>Monthly audits kept with full evidence (at least 13) <input type="number" name="retention_runs" min="13" max="120" value="' . (int) $s['retention_runs'] . '"></label></p>';
 		self::checkbox( 'remove_data_on_uninstall', 'Remove all audit data when the plugin is deleted', $s );
 		echo '<p><button class="button button-primary">' . esc_html__( 'Save settings', 'mlt-schema-audit' ) . '</button></p></form>';

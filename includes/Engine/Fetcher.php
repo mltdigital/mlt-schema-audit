@@ -34,7 +34,8 @@ class Fetcher {
 	);
 
 	/**
-	 * Fewest seconds worth starting a request with before a deadline.
+	 * Seconds a worker slice keeps beyond one full request, for the work
+	 * around it (storing the page, saving progress).
 	 *
 	 * @var int
 	 */
@@ -89,11 +90,12 @@ class Fetcher {
 	 * Outcomes: ok, blocked, timeout, too_large, http_error, not_found, gone,
 	 * unavailable, redirect_limit, error, deferred.
 	 *
-	 * With a deadline, no request outlives it: each request's timeout is the
-	 * lower of the setting and the time left. A request the deadline cut
-	 * short, or one there was no time left to make or retry, is "deferred"
-	 * (reason budget_timeout, budget_spent or budget_retry), so the caller can
-	 * try it again in a later slice instead of recording a false timeout.
+	 * With a deadline, no request outlives it, and none is cut short: a
+	 * request (or a retry, with its wait) starts only when the time left
+	 * covers the full timeout setting. One there was no time left to make or
+	 * retry is "deferred" (reason budget_spent or budget_retry), so the caller
+	 * can try it again in a later slice. A timeout is therefore always the
+	 * site taking longer than the setting (branch review R1).
 	 *
 	 * @param string $url         Absolute URL.
 	 * @param string $method      GET or HEAD.
@@ -195,7 +197,7 @@ class Fetcher {
 	 * @return array
 	 */
 	private function request_with_retries( $url, $ip, $method, array &$result, $deadline ) {
-		$empty = array(
+		$empty   = array(
 			'status'     => 0,
 			'headers'    => array(),
 			'body'       => '',
@@ -203,28 +205,21 @@ class Fetcher {
 			'truncated'  => false,
 			'reason'     => '',
 		);
-		$tries = 1 + max( 0, (int) $this->limits['retries'] );
+		$tries   = 1 + max( 0, (int) $this->limits['retries'] );
+		$timeout = (int) $this->limits['timeout'];
 		for ( $i = 0; $i < $tries; $i++ ) {
-			$timeout   = (int) $this->limits['timeout'];
-			$shortened = false;
-			if ( $deadline > 0 ) {
-				$left = (int) floor( $deadline - microtime( true ) );
-				if ( $left < self::MIN_REQUEST_SECONDS ) {
-					return array_merge(
-						$empty,
-						array(
-							'error_code' => 'deferred',
-							'reason'     => 'budget_spent',
-						)
-					);
-				}
-				if ( $left < $timeout ) {
-					$timeout   = $left;
-					$shortened = true;
-				}
+			if ( $deadline > 0 && microtime( true ) + $timeout > $deadline ) {
+				// Not enough time left for the full timeout: never shorten it.
+				return array_merge(
+					$empty,
+					array(
+						'error_code' => 'deferred',
+						'reason'     => 'budget_spent',
+					)
+				);
 			}
 			++$result['attempts'];
-			$response = $this->client->request(
+			$response  = $this->client->request(
 				$url,
 				$ip,
 				array(
@@ -234,13 +229,7 @@ class Fetcher {
 					'method'     => $method,
 				)
 			);
-			$response = array_merge( $empty, $response );
-			if ( $shortened && 'timeout' === $response['error_code'] ) {
-				// The budget, not the site, cut this request short.
-				$response['error_code'] = 'deferred';
-				$response['reason']     = 'budget_timeout';
-				return $response;
-			}
+			$response  = array_merge( $empty, $response );
 			$transient = in_array( $response['error_code'], array( 'transport_error' ), true )
 				|| in_array( (int) $response['status'], array( 429, 502, 503, 504 ), true );
 			// A timeout is not retried: the page has already held a worker for
@@ -249,7 +238,7 @@ class Fetcher {
 				return $response;
 			}
 			$wait = (int) $this->limits['backoff'] * ( $i + 1 );
-			if ( $deadline > 0 && microtime( true ) + $wait + self::MIN_REQUEST_SECONDS > $deadline ) {
+			if ( $deadline > 0 && microtime( true ) + $wait + $timeout > $deadline ) {
 				$response['error_code'] = 'deferred';
 				$response['reason']     = 'budget_retry';
 				return $response;

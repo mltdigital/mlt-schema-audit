@@ -91,6 +91,21 @@ class Worker {
 	public $requests = 0;
 
 	/**
+	 * Request timeout in use for this worker (seconds).
+	 *
+	 * @var int
+	 */
+	private $timeout;
+
+	/**
+	 * Whether no URL has been requested yet in this slice, so the next one
+	 * has the whole slice to itself.
+	 *
+	 * @var bool
+	 */
+	private $fresh = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param HttpClient|null $client Transport.
@@ -101,6 +116,46 @@ class Worker {
 		$this->settings = Settings::all();
 		$this->client   = $client instanceof HttpClient ? $client : new WpHttpClient();
 		$this->sleep    = is_callable( $sleep ) ? $sleep : 'sleep';
+		$this->timeout  = self::request_timeout( $this->settings['timeout'] );
+	}
+
+	/**
+	 * Seconds the PHP time limit of this process leaves for a slice, keeping
+	 * 10 in hand; 0 when there is no limit (WP-CLI).
+	 *
+	 * @return int
+	 */
+	public static function time_ceiling() {
+		$limit = (int) ini_get( 'max_execution_time' );
+		return $limit > 0 ? max( 5, $limit - 10 ) : 0;
+	}
+
+	/**
+	 * The request timeout the worker uses: the setting, lowered only where
+	 * the PHP time limit cannot fit one full request in a slice. The settings
+	 * screen says when that happens (branch review R1).
+	 *
+	 * @param int $setting Timeout setting (seconds).
+	 * @return int
+	 */
+	public static function request_timeout( $setting ) {
+		$ceiling = self::time_ceiling();
+		if ( $ceiling > 0 ) {
+			return max( 1, min( (int) $setting, $ceiling - Fetcher::MIN_REQUEST_SECONDS ) );
+		}
+		return max( 1, (int) $setting );
+	}
+
+	/**
+	 * A slice budget long enough for one request with the full timeout, so
+	 * a page or sitemap that answers within the timeout is always read.
+	 *
+	 * @param int $budget  Budget the caller asked for (seconds).
+	 * @param int $timeout Request timeout in use (seconds).
+	 * @return int
+	 */
+	public static function slice_budget( $budget, $timeout ) {
+		return max( 1, (int) $budget, (int) $timeout + Fetcher::MIN_REQUEST_SECONDS );
 	}
 
 	/**
@@ -123,8 +178,8 @@ class Worker {
 			// Queue the next tick before working, so a process killed part way
 			// through (PHP time limit, host kill) still has a continuation
 			// (finding 4). A normal finish below brings it forward.
-			Scheduler::continue_worker( (int) $budget + self::CONTINUATION_GRACE );
 			$worker = new self();
+			Scheduler::continue_worker( self::slice_budget( $budget, $worker->timeout ) + self::CONTINUATION_GRACE );
 			$status = $worker->process( (int) $run['id'], $budget );
 		}
 		Outbox::process();
@@ -137,15 +192,18 @@ class Worker {
 	}
 
 	/**
-	 * Work on a run for up to $budget seconds.
+	 * Work on a run for up to $budget seconds, raised where needed to fit one
+	 * request with the full timeout (slice_budget()).
 	 *
 	 * @param int $run_id Run ID.
 	 * @param int $budget Seconds.
 	 * @return array { state, phase, done, total, run_id }
 	 */
 	public function process( $run_id, $budget ) {
-		$deadline = microtime( true ) + max( 1, (int) $budget );
-		$token    = wp_generate_password( 20, false );
+		$budget      = self::slice_budget( $budget, $this->timeout );
+		$deadline    = microtime( true ) + $budget;
+		$token       = wp_generate_password( 20, false );
+		$this->fresh = true;
 		if ( ! $this->repo->claim_run( $run_id, $token, (int) $budget + 120 ) ) {
 			return $this->status( $run_id, 'locked' );
 		}
@@ -234,7 +292,7 @@ class Worker {
 			$policy,
 			$this->client,
 			array(
-				'timeout'    => (int) $this->settings['timeout'],
+				'timeout'    => $this->timeout,
 				'max_bytes'  => (int) $this->settings['max_bytes'],
 				'user_agent' => self::user_agent(),
 			),
@@ -282,13 +340,17 @@ class Worker {
 				}
 				if ( ! $state['done'] ) {
 					$before          = (int) $state['fetched'];
-					$state           = Discovery::sitemap_step( $fetcher, $policy, $state, $deadline );
+					$state           = Discovery::sitemap_step( $fetcher, $policy, $state, $deadline, $this->fresh );
+					$this->fresh     = false;
 					$this->requests += (int) $state['fetched'] - $before;
 					update_option( self::DISCOVERY_OPTION, $state, false );
 					$this->save_run( (int) $run['id'], array( 'progress_utc' => Repository::now() ) );
 					return ! $state['deferred'];
 				}
 				$sitemap = $state['out'];
+				if ( ! empty( $state['not_read'] ) ) {
+					$scope['sitemaps_not_read'] = (int) $state['not_read'];
+				}
 			}
 			$candidates = array_merge( Discovery::from_wordpress( $this->settings ), $sitemap );
 		}
@@ -359,13 +421,17 @@ class Worker {
 			// Record the attempt before the request, so a request that kills
 			// the process is not repeated for ever.
 			$this->repo->update_run_url( (int) $row['id'], array( 'attempts' => $attempts ) );
-			$result = $fetcher->fetch( $row['url'], 'GET', false, $deadline );
+			$fair        = $this->fresh;
+			$this->fresh = false;
+			$result      = $fetcher->fetch( $row['url'], 'GET', false, $deadline );
 			if ( $result['attempts'] > 0 ) {
 				++$this->requests;
 			}
 			if ( 'deferred' === $result['outcome'] ) {
-				if ( 0 === (int) $result['attempts'] ) {
-					// No request was made: the attempt does not count.
+				if ( 0 === (int) $result['attempts'] || ! $fair ) {
+					// No request was made, or the URL did not have the whole
+					// slice: the attempt does not count. The URL stays first
+					// in line, so the next slice starts with it.
 					$this->repo->update_run_url( (int) $row['id'], array( 'attempts' => $attempts - 1 ) );
 					return false;
 				}
@@ -390,20 +456,17 @@ class Worker {
 	}
 
 	/**
-	 * The outcome recorded for a URL or file deferred on its last attempt:
-	 * a timeout when the budget kept cutting the request short, otherwise an
-	 * error with reason budget_spent. Either way it counts as unread.
+	 * The outcome recorded for a URL or file deferred on its last attempt,
+	 * each of them with a whole slice to itself (a redirect chain or retries
+	 * longer than a slice): an error with reason budget_spent, counted as
+	 * unread.
 	 *
 	 * @param array $result Fetch result with outcome deferred.
 	 * @return array
 	 */
 	private static function settle_deferral( array $result ) {
-		if ( 'budget_timeout' === $result['reason'] ) {
-			$result['outcome'] = 'timeout';
-		} else {
-			$result['outcome'] = 'error';
-			$result['reason']  = 'budget_spent';
-		}
+		$result['outcome'] = 'error';
+		$result['reason']  = 'budget_spent';
 		return $result;
 	}
 
@@ -631,8 +694,10 @@ class Worker {
 				$this->save_run( (int) $run['id'], array( 'summary' => (string) wp_json_encode( $summary ) ) );
 				// A sameAs profile link is a page: the normal page policy, not
 				// the wider static-file policy images and files use.
-				$is_file = SiteRules::is_file_check( $resources[ $url ] );
-				$result  = $fetcher->fetch( $url, 'HEAD', $is_file, $deadline );
+				$is_file     = SiteRules::is_file_check( $resources[ $url ] );
+				$fair        = $this->fresh;
+				$this->fresh = false;
+				$result      = $fetcher->fetch( $url, 'HEAD', $is_file, $deadline );
 				if ( $result['attempts'] > 0 ) {
 					++$this->requests;
 				}
@@ -643,10 +708,12 @@ class Worker {
 					}
 				}
 				if ( 'deferred' === $result['outcome'] ) {
-					if ( 0 === (int) $result['attempts'] ) {
+					// As for pages: only a deferral with the whole slice counts.
+					if ( 0 === (int) $result['attempts'] || ! $fair ) {
 						$summary['resource_attempts'] = $attempt - 1;
+						break;
 					}
-					if ( 0 === (int) $result['attempts'] || $attempt < self::MAX_URL_ATTEMPTS ) {
+					if ( $attempt < self::MAX_URL_ATTEMPTS ) {
 						break;
 					}
 					$result = self::settle_deferral( $result );

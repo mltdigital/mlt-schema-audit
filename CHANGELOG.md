@@ -40,6 +40,12 @@ Two code reviews on 30 October found defects to fix before any pilot. Fixed so f
 
 Still open: every item of both reviews is now fixed or answered (BUG-3 was checked and is not a defect: the size cap counts decompressed bytes; a test now holds that). Own-host `sameAs` pages are checked again (URL-008) and a page of exactly the size cap is no longer reported as cut. What remains: (1) a run on a real PHP 7.4 (only static checks were possible here); (2) a run on a real MySQL or MariaDB server: the static check found nothing more, but the database upgrade, the transaction around the frozen URL list, the 191-character outbox key and affected-row counts were tested on the SQLite development site only. For the owner to decide, unchanged: the www or bare form of a public site on a non-standard port is still refused by WordPress's own port rule.
 
+### Branch review (2 November 2026)
+
+A review of the review-fix branch found five more defects. Fixed so far:
+
+- Request timeout and slices (branch review R1): the finding 4 fix lowered each request's timeout to the time left in the worker's slice. The audit screen's step has 8 seconds, so with the screen open a page or sitemap answering in 8 to 15 seconds was cut short three times and then recorded as a timeout (or a sitemap given up, its pages silently left out), although it answers within the 15 second setting; and under WordPress cron no setting above about 19 seconds took effect. Now a request starts only when the slice has the full timeout left, and is never shortened, so a timeout always means the site took longer than the setting; no request outlives the slice. Every slice (WordPress cron, the audit screen's step, WP-CLI) is raised to at least the timeout plus 2 seconds (17 seconds at the default). A page, file or sitemap deferred for lack of time stays first in line and is not counted; a deferral counts only when it had the whole slice (a redirect chain or retries that do not fit one), and the third such is recorded as an error (`budget_spent`). Where the PHP time limit cannot fit the setting (limit less 10 seconds, less 2), cron and audit-screen work use the lower value and the settings screen shows a warning; WP-CLI uses the full setting. Sitemaps that could not be read (other than not found) are now counted under "Left out, with reasons" on the audit screen. Contract revision row 25.
+
 ### Stage 7: documents and release build
 
 - Staff guide, server cron hand-over note for the Guru Hosting servers, contract revision notes, README.

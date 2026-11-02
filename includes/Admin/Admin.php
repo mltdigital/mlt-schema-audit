@@ -302,7 +302,9 @@ class Admin {
 
 	/**
 	 * Work on the audit in progress while its screen is open, so a manual
-	 * audit finishes even where cron is slow. Short budget per request.
+	 * audit finishes even where cron is slow. Short budget per request: 8
+	 * seconds, or one full request timeout plus 2 if that is longer, so a
+	 * slow page is read here rather than deferred (branch review R1).
 	 */
 	public static function ajax_step() {
 		if ( ! current_user_can( 'mltsa_audit' ) ) {

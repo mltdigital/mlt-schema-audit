@@ -322,7 +322,8 @@ class Scheduler {
 
 	/**
 	 * Worker event fired by WordPress cron: a short budget, well inside the
-	 * PHP time limit of a web request.
+	 * PHP time limit of a web request. The worker raises it to fit one
+	 * request with the full timeout (Worker::slice_budget()).
 	 */
 	public static function on_worker() {
 		$limit  = (int) ini_get( 'max_execution_time' );
