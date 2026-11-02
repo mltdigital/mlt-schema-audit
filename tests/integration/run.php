@@ -827,6 +827,52 @@ itest(
 	}
 );
 
+itest(
+	'Review ENG-4: latest notes for a findings export come from one query per 500 issues, same answer as one query each',
+	static function () {
+		global $wpdb;
+		$repo  = new Repository();
+		$table = Installer::table( 'events' );
+		$base  = 9100000;
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE object_type = 'issue' AND object_id BETWEEN %d AND %d", $base, $base + 2000 ) );
+		$repo->log_event( 'note', array( 'text' => 'first' ), 1, 'issue', $base + 1 );
+		$repo->log_event( 'status', array( 'to' => 'open' ), 1, 'issue', $base + 1 );
+		$repo->log_event( 'note', array( 'text' => 'second' ), 1, 'issue', $base + 1 );
+		$repo->log_event( 'status', array( 'to' => 'open' ), 1, 'issue', $base + 2 );
+		$repo->log_event( 'note', array( 'other' => 'no text' ), 1, 'issue', $base + 3 );
+		$repo->log_event( 'note', array( 'text' => 'not an issue' ), 1, 'run', $base + 4 );
+		$repo->log_event( 'note', array( 'text' => 'other issue' ), 1, 'issue', $base + 5 );
+		$ids = array( $base + 1, $base + 2, $base + 3, $base + 4, $base + 5, $base + 6, $base + 1 );
+
+		// The old behaviour: one query per issue, the last note event wins.
+		$expected = array();
+		foreach ( array_unique( $ids ) as $id ) {
+			foreach ( $repo->events_for( 'issue', $id ) as $event ) {
+				if ( 'note' === $event['event_type'] ) {
+					$data            = Repository::decode( $event['data'] );
+					$expected[ $id ] = isset( $data['text'] ) ? (string) $data['text'] : '';
+				}
+			}
+		}
+		$before = $wpdb->num_queries;
+		$got    = \MLT\SchemaAudit\Issues::latest_notes( $ids );
+		$used   = $wpdb->num_queries - $before;
+		ksort( $got );
+		ksort( $expected );
+		icheck( $expected === $got, 'Same output as the per-issue loop: ' . wp_json_encode( $got ) . ' vs ' . wp_json_encode( $expected ) );
+		icheck( array( $base + 1 => 'second', $base + 3 => '', $base + 5 => 'other issue' ) === $got, 'Latest note wins; no text gives an empty string; other object types and non-note events ignored' );
+		icheck( 1 === $used, 'One query for a small set, used ' . $used );
+
+		$many = range( $base + 1, $base + 1200 );
+		$before = $wpdb->num_queries;
+		$got    = \MLT\SchemaAudit\Issues::latest_notes( $many );
+		icheck( 3 === $wpdb->num_queries - $before, 'Three queries for 1200 issues, used ' . ( $wpdb->num_queries - $before ) );
+		icheck( 'second' === $got[ $base + 1 ], 'Chunked read gives the same answer' );
+		icheck( array() === \MLT\SchemaAudit\Issues::latest_notes( array() ), 'Empty list, no result' );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE object_id BETWEEN %d AND %d AND object_type IN ('issue','run')", $base, $base + 2000 ) );
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }

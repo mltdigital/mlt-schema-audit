@@ -669,6 +669,34 @@ class Repository {
 	}
 
 	/**
+	 * The latest event of one type on each of several objects, in as few queries as possible.
+	 *
+	 * Large sets are read in chunks so one statement never carries thousands of placeholders.
+	 *
+	 * @param string $object_type Type.
+	 * @param string $event_type  Event type.
+	 * @param array  $object_ids  IDs.
+	 * @return array object_id => event row (object_id, data)
+	 */
+	public function latest_events_for( $object_type, $event_type, array $object_ids ) {
+		global $wpdb;
+		$out = array();
+		$ids = array_values( array_unique( array_map( 'intval', $object_ids ) ) );
+		foreach ( array_chunk( $ids, 500 ) as $chunk ) {
+			$in   = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
+			$args = array_merge( array( (string) $object_type, (string) $event_type ), $chunk );
+			$rows = (array) $wpdb->get_results(
+				$wpdb->prepare( "SELECT e.object_id, e.data FROM {$this->t( 'events' )} e INNER JOIN ( SELECT MAX(id) AS last_id FROM {$this->t( 'events' )} WHERE object_type = %s AND event_type = %s AND object_id IN ($in) GROUP BY object_id ) l ON e.id = l.last_id", $args ), // phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $in is a list of %d placeholders.
+				ARRAY_A
+			);
+			foreach ( $rows as $row ) {
+				$out[ (int) $row['object_id'] ] = $row;
+			}
+		}
+		return $out;
+	}
+
+	/**
 	 * Recent events, optionally of some types.
 	 *
 	 * @param int   $limit Limit.

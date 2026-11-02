@@ -24,6 +24,7 @@ Two code reviews on 30 October found defects to fix before any pilot. Fixed so f
 - Approved numbers in evidence (second review, BUG-2): the FACT-006 evidence listed approved telephone numbers as stored (without the leading zero, for example `1294464341`). It now shows them as staff enter them (`01294464341`). Matching is unchanged.
 - CSV formula guard (second review, SEC-1): the guard prefixed a cell only when its first byte was `=`, `+`, `-`, `@`, tab or carriage return, so a cell starting with a space or line break before one of them (for example a newline then `=HYPERLINK(...)`) was not neutralised. It now also checks the first visible character after any spaces, control characters or Unicode whitespace (no-break and zero-width spaces, byte-order mark). Every export file writes its cells through this one guard.
 - Reproducible ZIPs (second review, SEC-4): ZIP entry dates were read in the server's timezone, so the same commit built on machines in different timezones gave different checksums. They are now read in UTC. Export ZIPs and the release build both use the one writer.
+- Findings export notes (second review, ENG-4): the findings export read each issue's note history with one query per issue. It now reads the latest note of every issue in one query (500 issues per query for large exports), with the same output.
 
 Still open: finding 9 of the first review and the remaining confirmed items of the second (see `STATE.md` in the project folder).
 
