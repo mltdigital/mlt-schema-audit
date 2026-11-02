@@ -204,3 +204,38 @@ mltsa_test(
 		);
 	}
 );
+
+mltsa_test(
+	'Review 7: a removed or re-versioned rule is held, not reported as a website fix',
+	static function () {
+		$pages = array( 'firm.example/a' => array( 'coverage' => 'ok', 'markup' => 'm' ) );
+		$base  = array(
+			'findings'    => array(
+				'p' => array( 'hash' => 'h', 'rule_id' => 'ID-001', 'page' => 'firm.example/a' ),
+				'q' => array( 'hash' => 'h', 'rule_id' => 'ID-002', 'page' => 'firm.example/a' ),
+			),
+			'pages'       => $pages,
+			'fingerprint' => array( 'ID-001' => 1, 'ID-002' => 1 ),
+		);
+		// ID-001 removed from the rule set; ID-002 unchanged and no longer firing.
+		$now    = array(
+			'findings'    => array(),
+			'pages'       => $pages,
+			'fingerprint' => array( 'ID-002' => 1 ),
+		);
+		$result = Comparator::compare( $base, $now );
+		check_same( array( 'ID-001' ), $result['rules_changed'], 'The removed rule is a rule change' );
+		check_same( array( 'q' ), $result['resolved'], 'Only the rule that still exists can be a website fix' );
+		check_same( array( 'p' ), $result['held_rule_change'], 'The removed rule is held' );
+
+		// Re-versioned rule: finding gone is held; finding with different evidence is a rule-driven change.
+		$base['findings']['q']['hash'] = 'old';
+		$now['fingerprint']            = array( 'ID-002' => 2 );
+		$now['findings']               = array( 'q' => array( 'hash' => 'new', 'rule_id' => 'ID-002', 'page' => 'firm.example/a' ) );
+		$result                        = Comparator::compare( $base, $now );
+		check_same( array( 'q' ), $result['changed_rule_change'], 'Evidence change under a changed rule is a rule change' );
+		check_same( array(), $result['changed'], 'Not a website change' );
+		check_same( array( 'p' ), $result['held_rule_change'], 'ID-001 is now absent from the rule set' );
+		check_same( array(), $result['resolved'], 'Nothing resolved' );
+	}
+);

@@ -259,15 +259,17 @@ class Views {
 		if ( ! empty( $summary['comparison'] ) ) {
 			echo '<h2>' . esc_html__( 'Compared with the previous audit', 'mlt-schema-audit' ) . '</h2><ul class="mltsa-list">';
 			$labels = array(
-				'new'             => 'New findings',
-				'new_rule_change' => 'New because a rule changed (not a website change)',
-				'returned'        => 'Returned',
-				'changed'         => 'Changed',
-				'resolved'        => 'No longer detected',
-				'markup_changed'  => 'Pages with changed markup',
-				'pages_added'     => 'Pages added',
-				'pages_removed'   => 'Pages removed',
-				'coverage_lost'   => 'Pages read last time but not this time',
+				'new'                 => 'New findings',
+				'new_rule_change'     => 'New because a rule changed (not a website change)',
+				'returned'            => 'Returned',
+				'changed'             => 'Changed',
+				'changed_rule_change' => 'Changed because a rule changed (not a website change)',
+				'resolved'            => 'No longer detected',
+				'held_rule_change'    => 'Not reported this time because a rule changed or was removed (not a fix)',
+				'markup_changed'      => 'Pages with changed markup',
+				'pages_added'         => 'Pages added',
+				'pages_removed'       => 'Pages removed',
+				'coverage_lost'       => 'Pages read last time but not this time',
 			);
 			foreach ( $labels as $key => $label ) {
 				echo '<li>' . esc_html( $label . ': ' . ( isset( $summary['comparison'][ $key ] ) ? (int) $summary['comparison'][ $key ] : 0 ) ) . '</li>';

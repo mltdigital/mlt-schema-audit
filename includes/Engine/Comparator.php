@@ -281,21 +281,26 @@ class Comparator {
 	 */
 	public static function compare( array $baseline, array $current, array $ever = array() ) {
 		$result = array(
-			'new'             => array(),
-			'new_rule_change' => array(),
-			'returned'        => array(),
-			'resolved'        => array(),
-			'changed'         => array(),
-			'unchanged'       => array(),
-			'pages_added'     => array(),
-			'pages_removed'   => array(),
-			'markup_changed'  => array(),
-			'coverage_lost'   => array(),
-			'rules_changed'   => array(),
+			'new'                 => array(),
+			'new_rule_change'     => array(),
+			'returned'            => array(),
+			'resolved'            => array(),
+			'held_rule_change'    => array(),
+			'changed'             => array(),
+			'changed_rule_change' => array(),
+			'unchanged'           => array(),
+			'pages_added'         => array(),
+			'pages_removed'       => array(),
+			'markup_changed'      => array(),
+			'coverage_lost'       => array(),
+			'rules_changed'       => array(),
 		);
-		foreach ( $current['fingerprint'] as $rule => $version ) {
-			if ( ! isset( $baseline['fingerprint'][ $rule ] ) || (int) $baseline['fingerprint'][ $rule ] !== (int) $version ) {
-				$result['rules_changed'][] = $rule;
+		// A rule counts as changed when it was added, removed or re-versioned,
+		// so look at the union of both runs' rule IDs, not only the current set.
+		$rule_ids = array_unique( array_merge( array_keys( $baseline['fingerprint'] ), array_keys( $current['fingerprint'] ) ) );
+		foreach ( $rule_ids as $rule ) {
+			if ( ! isset( $baseline['fingerprint'][ $rule ], $current['fingerprint'][ $rule ] ) || (int) $baseline['fingerprint'][ $rule ] !== (int) $current['fingerprint'][ $rule ] ) {
+				$result['rules_changed'][] = (string) $rule;
 			}
 		}
 		foreach ( $current['findings'] as $key => $item ) {
@@ -308,7 +313,11 @@ class Comparator {
 					$result['new'][] = $key;
 				}
 			} elseif ( $baseline['findings'][ $key ]['hash'] !== $item['hash'] ) {
-				$result['changed'][] = $key;
+				if ( in_array( $item['rule_id'], $result['rules_changed'], true ) ) {
+					$result['changed_rule_change'][] = $key;
+				} else {
+					$result['changed'][] = $key;
+				}
 			} else {
 				$result['unchanged'][] = $key;
 			}
@@ -331,7 +340,13 @@ class Comparator {
 			} else {
 				$read = isset( $current['pages'][ $page ] ) && 'ok' === $current['pages'][ $page ]['coverage'];
 			}
-			if ( $read && ! in_array( $item['rule_id'], $result['rules_changed'], true ) ) {
+			if ( ! $read ) {
+				continue;
+			}
+			// A removed or changed rule is not a website fix: the issue is held.
+			if ( in_array( $item['rule_id'], $result['rules_changed'], true ) ) {
+				$result['held_rule_change'][] = $key;
+			} else {
 				$result['resolved'][] = $key;
 			}
 		}
@@ -363,7 +378,7 @@ class Comparator {
 	 * @return bool
 	 */
 	public static function is_meaningful( array $comparison ) {
-		foreach ( array( 'new', 'new_rule_change', 'returned', 'resolved', 'changed', 'pages_added', 'pages_removed', 'markup_changed', 'coverage_lost' ) as $list ) {
+		foreach ( array( 'new', 'new_rule_change', 'returned', 'resolved', 'held_rule_change', 'changed', 'changed_rule_change', 'pages_added', 'pages_removed', 'markup_changed', 'coverage_lost' ) as $list ) {
 			if ( ! empty( $comparison[ $list ] ) ) {
 				return true;
 			}
