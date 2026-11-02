@@ -2,7 +2,7 @@
 
 A read-only WordPress plugin that audits the JSON-LD structured data in a site's own server responses, keeps a register of findings across runs, and can email a monthly change summary. It never creates, edits, repairs or removes schema, page content or another plugin's data.
 
-Version 0.1.0, unreleased. **Not approved for any client or pilot site** until Gav C (CTO) has signed off the product contract and threat model and a developer has reviewed the security-sensitive code (fetch, access control, storage, export, mail).
+Version 0.2.0, unreleased. **Not approved for any client or pilot site** until Gav C (CTO) has signed off the product contract and threat model and a developer has reviewed the security-sensitive code (fetch, access control, storage, export, mail).
 
 ## Documents
 

@@ -457,6 +457,7 @@ class Worker {
 			$result      = $fetcher->fetch( $row['url'], 'GET', false, $deadline, $resume );
 			if ( $result['attempts'] > 0 ) {
 				++$this->requests;
+				SelfFetch::record( (int) $run['id'], $result, $this->timeout );
 			}
 			if ( 'deferred' === $result['outcome'] ) {
 				// The URL stays first in line and the next slice continues
@@ -1216,6 +1217,7 @@ class Worker {
 			'phase'  => $run ? $run['phase'] : '',
 			'done'   => $run ? (int) $run['done_count'] : 0,
 			'total'  => $run ? (int) $run['url_count'] : 0,
+			'stall'  => SelfFetch::detected( $run_id ) ? SelfFetch::message() : '',
 		);
 	}
 }

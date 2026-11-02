@@ -77,14 +77,18 @@ Cells that start with `=`, `+`, `-` or `@` are prefixed with an apostrophe so Ex
 
 ## Setting up monthly monitoring
 
-In **Settings** (needs `mltsa_manage`):
+Activating the plugin for the first time opens **Settings** (needs `mltsa_manage`). A set-up checklist at the top shows each step as **To do** or **Done**:
 
-1. **Scope**: choose the content types. The homepage is always included. Tick **The scope is confirmed**.
-2. **Schedule**: for example first Monday at 09:00, Europe/London. The screen shows the next three dates. **Stagger sites on the same server** across the first week (see the server cron note). Tick **The schedule is confirmed**.
-3. **Recipients**: named MLT or client addresses, one per line, at most 10. The site's admin address is never used.
+1. **Scope**: choose the content types. The homepage is always included. Tick **I have checked these content types and confirm this is the scope for this site**. No audit runs, manual or monthly, until this is done; the audit screen links here instead of offering **Start audit**. Changing the content types asks for it again.
+2. **Schedule**: for example first Monday at 09:00, Europe/London. The screen shows the next three dates. **Stagger sites on the same server** across the first week (see the server cron note). Tick **I confirm this schedule suits this site and its server**.
+3. **Recipients**: named MLT or client addresses, one per line, at most 10. The site's admin address is never used. Saving the list confirms it for this site address.
 4. Tick **Run the monthly audit and send the email** and save. It cannot be switched on until steps 1 to 3 are done.
 
 The email carries the site address, the date, counts and a login link. It never contains page titles, page addresses, evidence or notes. It is sent when something meaningful changed, on the first audit, or when an audit could not read every page (labelled as an operational alert, never an all-clear). "Submitted" on the Health screen means the site handed the email to its mail system; it does not prove delivery.
+
+## A slow audit on a small server
+
+Each page is read by asking the site itself for it. On a server with very few PHP workers (Local by Flywheel runs two), the open audit screen and WordPress cron can hold them all, so each page waits for the full timeout. The audit screen then says so. The audit still finishes. To speed it up, raise the PHP worker limit (`pm.max_children`) or run the audit with `wp mltsa audit --wait` or the server cron job, with the audit screen closed.
 
 ## Clones, staging copies and migrations
 

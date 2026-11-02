@@ -237,6 +237,7 @@ itest(
 		icheck( array() === cron_hooks(), 'No mltsa_ events after deactivation: ' . implode( ',', cron_hooks() ) );
 		icheck( false === get_option( 'mltsa_lock_start' ), 'No start lock' );
 		Installer::activate();
+		delete_option( 'mltsa_activation_redirect' ); // Tests drive screens directly, not the first-run redirect.
 		$hooks = array_count_values( cron_hooks() );
 		icheck( 1 === ( isset( $hooks['mltsa_monthly_start'] ) ? $hooks['mltsa_monthly_start'] : 0 ), 'One start rebuilt' );
 		Scheduler::catch_up();
@@ -683,6 +684,7 @@ itest(
 		$s1 = snapshot();
 		icheck( array() === foreign_changes( $s0, $s1 ), 'Deactivation: ' . implode( ', ', foreign_changes( $s0, $s1 ) ) );
 		Installer::activate();
+		delete_option( 'mltsa_activation_redirect' ); // Tests drive screens directly, not the first-run redirect.
 		$s2 = snapshot();
 		icheck( array() === foreign_changes( $s1, $s2 ), 'Activation: ' . implode( ', ', foreign_changes( $s1, $s2 ) ) );
 		finish_active_runs();
@@ -703,6 +705,7 @@ itest(
 		global $wpdb;
 		icheck( (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->prefix}mltsa_runs" ) > 0, 'Audit data kept when not chosen for removal' );
 		Installer::activate();
+		delete_option( 'mltsa_activation_redirect' ); // Tests drive screens directly, not the first-run redirect.
 		icheck( get_role( 'administrator' )->has_cap( 'mltsa_audit' ), 'Reactivated' );
 	}
 );
@@ -717,6 +720,7 @@ itest(
 		$tables = $wpdb->get_col( "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%mltsa%'" );
 		icheck( array() === $tables, 'Tables removed: ' . implode( ',', $tables ) );
 		Installer::activate();
+		delete_option( 'mltsa_activation_redirect' ); // Tests drive screens directly, not the first-run redirect.
 		icheck( 7 === count( $wpdb->get_col( "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%mltsa%'" ) ), 'Recreated on activation' );
 		icheck( $backup > 0, 'There was data before' );
 	}
@@ -1979,6 +1983,60 @@ itest(
 			finish_active_runs();
 		}
 		icheck( ! MLT\SchemaAudit\Installer::upgrade_pending(), 'Version restored' );
+	}
+);
+
+itest(
+	'First-run UX: the Settings screen opens once after activation, shows the checklist, and a manual audit waits for the scope',
+	static function () use ( $admin, $repo ) {
+		finish_active_runs();
+		reset_settings();
+		delete_option( 'mltsa_setup_seen' );
+		list( $cookie, $nonce ) = session_for( $admin );
+		try {
+			add_option( 'mltsa_activation_redirect', 1, '', 'no' );
+			$r = http( 'GET', '/wp-admin/index.php', $cookie );
+			icheck( 302 === $r['status'] && false !== strpos( $r['headers'], 'page=mltsa-settings' ), 'First admin screen after activation opens Settings: ' . $r['status'] );
+			wp_cache_delete( 'alloptions', 'options' );
+			wp_cache_delete( 'mltsa_activation_redirect', 'options' );
+			icheck( false === get_option( 'mltsa_activation_redirect' ), 'The redirect is used once' );
+			$r = http( 'GET', '/wp-admin/index.php', $cookie );
+			icheck( 200 === $r['status'], 'The next admin screen is not redirected: ' . $r['status'] );
+
+			$r = http( 'GET', '/wp-admin/admin.php?page=mltsa-settings', $cookie );
+			icheck( false !== strpos( $r['body'], 'Set-up checklist' ) && 3 === substr_count( $r['body'], '<li class="mltsa-todo">' ), 'Checklist shows three steps to do' );
+			icheck( false !== strpos( $r['body'], 'id="mltsa-step-scope"' ) && false !== strpos( $r['body'], 'Why it needs confirming' ), 'Scope step has a heading and an explanation' );
+
+			$r = http( 'GET', '/wp-admin/admin.php?page=mltsa', $cookie );
+			icheck( false === strpos( $r['body'], 'name="action" value="mltsa_start"' ) && false !== strpos( $r['body'], 'mltsa-step-scope' ), 'Audit screen links to the scope step instead of offering a start' );
+			$count = $repo->count_runs();
+			$r     = http( 'POST', '/wp-admin/admin-post.php', $cookie, array( 'action' => 'mltsa_start', '_wpnonce' => $nonce['mltsa_start'] ) );
+			icheck( false !== strpos( $r['headers'], 'mltsa_notice=scope_needed' ) && $repo->count_runs() === $count, 'A manual start is refused until the scope is confirmed' );
+
+			Settings::update( array( 'scope_confirmed' => true ), $admin );
+			icheck( Settings::setup_steps()[0]['done'], 'Scope step done after confirming' );
+			$r = http( 'GET', '/wp-admin/admin.php?page=mltsa', $cookie );
+			icheck( false !== strpos( $r['body'], 'name="action" value="mltsa_start"' ), 'Start offered once the scope is confirmed' );
+		} finally {
+			delete_option( 'mltsa_activation_redirect' );
+			finish_active_runs();
+			reset_settings();
+		}
+	}
+);
+
+itest(
+	'First-run UX: the audit screen and step response report a self-fetch stall',
+	static function () use ( $admin ) {
+		delete_option( MLT\SchemaAudit\Ops\SelfFetch::OPTION );
+		icheck( ! MLT\SchemaAudit\Ops\SelfFetch::detected( 42 ), 'Nothing recorded, nothing shown' );
+		MLT\SchemaAudit\Ops\SelfFetch::record( 42, array( 'outcome' => 'ok', 'duration_ms' => 300 ), 15 );
+		for ( $i = 0; $i < 3; $i++ ) {
+			MLT\SchemaAudit\Ops\SelfFetch::record( 42, array( 'outcome' => 'timeout', 'duration_ms' => 15000 ), 15 );
+		}
+		icheck( MLT\SchemaAudit\Ops\SelfFetch::detected( 42 ), 'Stall stored for the run' );
+		icheck( ! MLT\SchemaAudit\Ops\SelfFetch::detected( 43 ), 'Not for another run' );
+		delete_option( MLT\SchemaAudit\Ops\SelfFetch::OPTION );
 	}
 );
 

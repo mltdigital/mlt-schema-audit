@@ -38,6 +38,7 @@ class Admin {
 		'saved'           => array( 'success', 'Saved.' ),
 		'unchanged'       => array( 'info', 'Nothing changed.' ),
 		'invalid'         => array( 'error', 'Not saved. See the messages below.' ),
+		'scope_needed'    => array( 'error', 'The audit was not started: confirm the audit scope on the Settings screen first, so the audit reads the pages you expect.' ),
 		'cancelled'       => array( 'success', 'The audit was cancelled.' ),
 		'not_cancelled'   => array( 'info', 'Nothing was cancelled: no audit was in progress, or it had already updated the issue register and was finishing.' ),
 	);
@@ -47,6 +48,7 @@ class Admin {
 	 */
 	public static function register() {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ) );
+		add_action( 'admin_init', array( __CLASS__, 'first_run_redirect' ) );
 		add_action( 'admin_enqueue_scripts', array( __CLASS__, 'assets' ) );
 		add_action( 'admin_post_mltsa_start', array( __CLASS__, 'handle_start' ) );
 		add_action( 'admin_post_mltsa_recheck', array( __CLASS__, 'handle_recheck' ) );
@@ -67,6 +69,28 @@ class Admin {
 		add_submenu_page( 'mltsa', 'Issue register', 'Issue register', 'mltsa_audit', 'mltsa-register', array( Views::class, 'register' ) );
 		add_submenu_page( 'mltsa', 'Settings', 'Settings', 'mltsa_manage', 'mltsa-settings', array( Views::class, 'settings' ) );
 		add_submenu_page( 'mltsa', 'Health', 'Health', 'mltsa_audit', 'mltsa-health', array( Views::class, 'health' ) );
+	}
+
+	/**
+	 * Open the Settings screen once after the first activation, so the
+	 * plugin is set up before anyone runs an audit. Skipped for AJAX, cron,
+	 * bulk activation and users who cannot manage settings.
+	 */
+	public static function first_run_redirect() {
+		if ( ! get_option( 'mltsa_activation_redirect' ) ) {
+			return;
+		}
+		if ( wp_doing_ajax() || wp_doing_cron() || is_network_admin() || isset( $_GET['activate-multi'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only flag set by core's bulk activation.
+			delete_option( 'mltsa_activation_redirect' );
+			return;
+		}
+		if ( ! current_user_can( 'mltsa_manage' ) ) {
+			return;
+		}
+		delete_option( 'mltsa_activation_redirect' );
+		update_option( 'mltsa_setup_seen', 1, false );
+		wp_safe_redirect( admin_url( 'admin.php?page=mltsa-settings' ) );
+		exit;
 	}
 
 	/**
@@ -163,6 +187,9 @@ class Admin {
 	public static function handle_start() {
 		self::require_cap( 'mltsa_audit' );
 		check_admin_referer( 'mltsa_start' );
+		if ( ! Settings::scope_confirmed() && ! \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			self::back( 'mltsa', 'scope_needed' );
+		}
 		$id = Scheduler::start_manual( get_current_user_id() );
 		self::back( 'mltsa', $id ? 'started' : self::refusal(), $id ? array( 'run' => $id ) : array() );
 	}

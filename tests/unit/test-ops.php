@@ -376,3 +376,34 @@ mltsa_test(
 		check_same( sha1( Evaluator::url_key( $long ) ), $frozen['urls'][0]['url_key'], 'Its key is the full URL\'s' );
 	}
 );
+
+mltsa_test(
+	'First-run UX: self-fetch stall shows after three fetches in a row at the time limit while another page answered quickly',
+	static function () {
+		$ok   = array( 'outcome' => 'ok', 'duration_ms' => 400 );
+		$slow = array( 'outcome' => 'timeout', 'duration_ms' => 15000 );
+		$cut  = array( 'outcome' => 'deferred', 'duration_ms' => 14000 );
+		$s    = \MLT\SchemaAudit\Ops\SelfFetch::next( array(), 7, $ok, 15 );
+		$s    = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 7, $slow, 15 );
+		$s    = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 7, $cut, 15 );
+		check_same( false, $s['detected'], 'Two slow fetches are not enough' );
+		$s = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 7, $slow, 15 );
+		check_same( true, $s['detected'], 'Three in a row with a quick page' );
+		$s = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 7, $ok, 15 );
+		check_same( true, $s['detected'], 'Stays shown for the run' );
+		$s = \MLT\SchemaAudit\Ops\SelfFetch::next( $s, 8, $slow, 15 );
+		check_same( false, $s['detected'], 'A new run starts clean' );
+
+		$n = array();
+		foreach ( array( $slow, $slow, $slow, $slow ) as $r ) {
+			$n = \MLT\SchemaAudit\Ops\SelfFetch::next( $n, 9, $r, 15 );
+		}
+		check_same( false, $n['detected'], 'A site that never answers quickly is slow, not stalled' );
+
+		$q = \MLT\SchemaAudit\Ops\SelfFetch::next( array(), 10, $ok, 15 );
+		foreach ( array( $slow, array( 'outcome' => 'timeout', 'duration_ms' => 2000 ), $slow, $slow ) as $r ) {
+			$q = \MLT\SchemaAudit\Ops\SelfFetch::next( $q, 10, $r, 15 );
+		}
+		check_same( false, $q['detected'], 'A quick failure breaks the run of slow fetches' );
+	}
+);

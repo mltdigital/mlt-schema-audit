@@ -53,8 +53,10 @@ class Installer {
 
 	/**
 	 * Activate.
+	 *
+	 * @param bool $network_wide Network activation on multisite.
 	 */
-	public static function activate() {
+	public static function activate( $network_wide = false ) {
 		self::create_tables();
 		$role = get_role( 'administrator' );
 		if ( $role ) {
@@ -66,6 +68,11 @@ class Installer {
 			add_option( Settings::OPTION, Settings::defaults(), '', 'no' );
 		}
 		Ops\Scheduler::reschedule_after_activation();
+		// Open the Settings screen once, after a first single activation
+		// only: not on bulk or network activation, and not on reactivation.
+		if ( ! $network_wide && ! isset( $_GET['activate-multi'] ) && false === get_option( 'mltsa_setup_seen', false ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only flag set by core's bulk activation.
+			add_option( 'mltsa_activation_redirect', 1, '', 'no' );
+		}
 	}
 
 	/**
@@ -104,6 +111,9 @@ class Installer {
 		delete_option( 'mltsa_health' );
 		delete_option( 'mltsa_mail_blocked' );
 		delete_option( 'mltsa_discovery_state' );
+		delete_option( 'mltsa_self_fetch' );
+		delete_option( 'mltsa_activation_redirect' );
+		delete_option( 'mltsa_setup_seen' );
 		delete_transient( 'mltsa_upgrade_retry' );
 
 		if ( $remove ) {

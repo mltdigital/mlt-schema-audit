@@ -51,6 +51,9 @@ class Cli {
 		if ( Installer::upgrade_pending() ) {
 			\WP_CLI::error( 'Refused: ' . Installer::upgrade_message() );
 		}
+		if ( ! Settings::scope_confirmed() ) {
+			\WP_CLI::error( 'Refused: confirm the audit scope on the Settings screen first.' );
+		}
 		$id = Ops\Scheduler::start_manual( 0 );
 		if ( ! $id ) {
 			\WP_CLI::error( 'Refused: another audit is in progress, or MLTSA_DISABLE is set.' );

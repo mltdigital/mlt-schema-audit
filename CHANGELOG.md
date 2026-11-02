@@ -2,7 +2,18 @@
 
 All notable changes to MLT Schema Audit. Dates are UK dates. Versions follow semantic versioning; nothing has been released yet.
 
-## Unreleased (0.1.0)
+## Unreleased (0.2.0)
+
+### First-run set-up (2 November 2026)
+
+Found by installing the 0.1.0 build on a Local by Flywheel test site.
+
+- First activation opens the Settings screen once (not on bulk or network activation, not on reactivation). A set-up checklist at the top shows the three steps, scope, schedule and recipients, each as To do or Done, linked to its section.
+- Each step now has a heading with its state, a plain-English description of what it means and why it needs confirming, and a To do style until it is done. The bare "The scope is confirmed" and "The schedule is confirmed" checkboxes are replaced with confirmations that say what is being confirmed. The monitoring section repeats what is still missing.
+- A manual audit is refused until the scope is confirmed, on the audit screen (which links to the scope step instead of offering Start audit), through admin-post and through `wp mltsa audit`. Before, a manual audit ran on the default content types before anyone had looked at them. Rechecks are unchanged.
+- Self-fetch stall: pages are read by HTTP requests back to the same site. Where the server has very few PHP workers (Local by Flywheel runs two), the audit screen's step and WordPress cron hold them all and each page waits for the full timeout. When three page fetches in a row run to the timeout while another page of the same run answered in under three seconds, the audit screen says so and how to fix it. State is kept per run in the `mltsa_self_fetch` option, removed on uninstall. Reading own-host pages without HTTP is proposed, not built (see the contract revision notes).
+- Per-page include and exclude written up as a proposed contract change, not built.
+
 
 ### Review fixes (30 October 2026)
 
