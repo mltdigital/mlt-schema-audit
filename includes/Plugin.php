@@ -20,8 +20,12 @@ class Plugin {
 	 * Boot on plugins_loaded.
 	 */
 	public static function boot() {
-		if ( get_option( 'mltsa_db_version' ) !== MLTSA_DB_VERSION ) {
+		if ( get_option( 'mltsa_db_version' ) !== MLTSA_DB_VERSION && ! get_transient( 'mltsa_upgrade_retry' ) ) {
 			Installer::create_tables();
+			if ( get_option( 'mltsa_db_version' ) !== MLTSA_DB_VERSION ) {
+				// The upgrade did not complete: try again in an hour, not on every page load.
+				set_transient( 'mltsa_upgrade_retry', 1, HOUR_IN_SECONDS );
+			}
 		}
 		Ops\Scheduler::register();
 		if ( is_admin() && class_exists( Admin\Admin::class ) ) {

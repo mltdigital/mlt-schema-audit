@@ -101,6 +101,9 @@ class Health {
 		if ( defined( 'MLTSA_ALLOW_PRIVATE_SELF' ) && MLTSA_ALLOW_PRIVATE_SELF ) {
 			$add( 'warn', 'Development setting', 'MLTSA_ALLOW_PRIVATE_SELF is set. Remove it on any live site.' );
 		}
+		if ( (string) get_option( 'mltsa_db_version' ) !== MLTSA_DB_VERSION ) {
+			$add( 'fail', 'Database upgrade', sprintf( 'The database schema is at version %s, not %s: the upgrade did not complete and is retried hourly. Check that the database user may alter tables.', (string) get_option( 'mltsa_db_version' ), MLTSA_DB_VERSION ) );
+		}
 		$add( 'ok', 'Versions', sprintf( 'Plugin %s, rule set %s, PHP %s, WordPress %s, database schema %s.', MLTSA_VERSION, \MLT\SchemaAudit\Engine\Rules::RULESET_VERSION, PHP_VERSION, get_bloginfo( 'version' ), (string) get_option( 'mltsa_db_version' ) ) );
 		return $out;
 	}

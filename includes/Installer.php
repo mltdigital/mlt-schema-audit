@@ -35,6 +35,23 @@ class Installer {
 	const TABLES = array( 'runs', 'run_urls', 'blocks', 'occurrences', 'issues', 'events', 'outbox' );
 
 	/**
+	 * Columns added by database upgrades, per table, checked before the new
+	 * version is recorded. Every table is listed so a missing one counts too.
+	 * Version 2 added issues.evidence. An added column is nullable or has a
+	 * default: some databases cannot add a NOT NULL column without one, and
+	 * MySQL before 8.0.13 allows no default on a text column.
+	 */
+	const UPGRADE_COLUMNS = array(
+		'runs'        => array( 'id' ),
+		'run_urls'    => array( 'id' ),
+		'blocks'      => array( 'id' ),
+		'occurrences' => array( 'id' ),
+		'issues'      => array( 'id', 'evidence' ),
+		'events'      => array( 'id' ),
+		'outbox'      => array( 'id' ),
+	);
+
+	/**
 	 * Activate.
 	 */
 	public static function activate() {
@@ -87,6 +104,7 @@ class Installer {
 		delete_option( 'mltsa_health' );
 		delete_option( 'mltsa_mail_blocked' );
 		delete_option( 'mltsa_discovery_state' );
+		delete_transient( 'mltsa_upgrade_retry' );
 
 		if ( $remove ) {
 			foreach ( self::TABLES as $table ) {
@@ -250,7 +268,7 @@ class Installer {
   change_reason varchar(20) NOT NULL DEFAULT '',
   observed_hash char(40) NOT NULL DEFAULT '',
   latest_occurrence_id bigint(20) unsigned NOT NULL DEFAULT 0,
-  evidence longtext NOT NULL,
+  evidence longtext,
   work_status varchar(30) NOT NULL DEFAULT 'open',
   owner_user_id bigint(20) unsigned NOT NULL DEFAULT 0,
   due_date date DEFAULT NULL,
@@ -303,6 +321,27 @@ class Installer {
 ) $c;";
 
 		dbDelta( $sql );
-		update_option( 'mltsa_db_version', MLTSA_DB_VERSION, false );
+		// dbDelta reports a column as added even when the database refused
+		// it, and a recorded version stops the upgrade being tried again, so
+		// record it only once the upgraded columns are really there.
+		if ( self::schema_ready() ) {
+			update_option( 'mltsa_db_version', MLTSA_DB_VERSION, false );
+		}
+	}
+
+	/**
+	 * Whether every table exists with every column a database upgrade added.
+	 *
+	 * @return bool
+	 */
+	public static function schema_ready() {
+		global $wpdb;
+		foreach ( self::UPGRADE_COLUMNS as $suffix => $columns ) {
+			$have = (array) $wpdb->get_col( 'SHOW COLUMNS FROM ' . self::table( $suffix ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery -- Fixed table names from a constant list; read once per upgrade.
+			if ( array_diff( $columns, $have ) ) {
+				return false;
+			}
+		}
+		return true;
 	}
 }

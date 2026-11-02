@@ -1119,6 +1119,116 @@ itest(
 	}
 );
 
+itest(
+	'Review reply: the database upgrade from version 1 adds the issues evidence column, keeps the data, records the version and can run twice',
+	static function () {
+		global $wpdb;
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		// Build the version 1 tables under a separate prefix, so the site's
+		// own tables are not touched (this SQLite layer has no RENAME).
+		$real_prefix    = $wpdb->prefix;
+		$saved_version  = get_option( 'mltsa_db_version' );
+		$wpdb->prefix   = $real_prefix . 'mltsaupg_';
+		$issues         = Installer::table( 'issues' );
+		try {
+			// The issues table as database version 1 created it (before review fix 2).
+			dbDelta(
+				"CREATE TABLE {$issues} (
+  id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  issue_key char(40) NOT NULL,
+  page_url varchar(2048) NOT NULL DEFAULT '',
+  site_wide tinyint(1) NOT NULL DEFAULT 0,
+  rule_id varchar(20) NOT NULL,
+  rule_version smallint(5) unsigned NOT NULL DEFAULT 1,
+  severity varchar(10) NOT NULL DEFAULT '',
+  entity_key varchar(1024) NOT NULL DEFAULT '',
+  property varchar(100) NOT NULL DEFAULT '',
+  first_run_id bigint(20) unsigned NOT NULL DEFAULT 0,
+  last_run_id bigint(20) unsigned NOT NULL DEFAULT 0,
+  first_observed_utc datetime DEFAULT NULL,
+  last_observed_utc datetime DEFAULT NULL,
+  verification_state varchar(30) NOT NULL DEFAULT 'present',
+  verification_run_id bigint(20) unsigned NOT NULL DEFAULT 0,
+  change_reason varchar(20) NOT NULL DEFAULT '',
+  observed_hash char(40) NOT NULL DEFAULT '',
+  latest_occurrence_id bigint(20) unsigned NOT NULL DEFAULT 0,
+  work_status varchar(30) NOT NULL DEFAULT 'open',
+  owner_user_id bigint(20) unsigned NOT NULL DEFAULT 0,
+  due_date date DEFAULT NULL,
+  external_link varchar(2048) NOT NULL DEFAULT '',
+  exception_reason text NOT NULL,
+  exception_reviewer varchar(100) NOT NULL DEFAULT '',
+  exception_review_date date DEFAULT NULL,
+  updated_utc datetime DEFAULT NULL,
+  PRIMARY KEY  (id),
+  UNIQUE KEY issue_key (issue_key),
+  KEY work_status (work_status),
+  KEY verification_state (verification_state),
+  KEY rule_id (rule_id)
+) " . $wpdb->get_charset_collate() . ';'
+			);
+			$columns = $wpdb->get_col( "SHOW COLUMNS FROM {$issues}" );
+			icheck( in_array( 'work_status', $columns, true ) && ! in_array( 'evidence', $columns, true ), 'Version 1 table built: ' . implode( ',', $columns ) );
+			$row = array(
+				'issue_key'          => sha1( 'upgrade-test' ),
+				'page_url'           => 'https://upgrade-test.example.invalid/a/',
+				'rule_id'            => 'FACT-001',
+				'severity'           => 'high',
+				'work_status'        => 'in_progress',
+				'owner_user_id'      => 7,
+				'external_link'      => 'https://tracker.example.invalid/1',
+				'exception_reason'   => 'Kept through the upgrade',
+				'verification_state' => 'unavailable',
+			);
+			icheck( false !== $wpdb->insert( $issues, $row ), 'Version 1 row stored: ' . $wpdb->last_error );
+			update_option( 'mltsa_db_version', '1', false );
+			icheck( get_option( 'mltsa_db_version' ) !== MLTSA_DB_VERSION, 'Plugin::boot() sees an old schema and upgrades' );
+
+			// A database that refuses the new column: the version is not
+			// recorded, so the upgrade is tried again later.
+			$refuse = static function ( $query ) {
+				return preg_match( '/^ALTER TABLE \S+ ADD COLUMN `?evidence/i', $query ) ? 'ALTER TABLE no_such_mltsa_table ADD COLUMN evidence longtext' : $query;
+			};
+			add_filter( 'query', $refuse );
+			try {
+				Installer::create_tables();
+			} finally {
+				remove_filter( 'query', $refuse );
+			}
+			icheck( ! in_array( 'evidence', $wpdb->get_col( "SHOW COLUMNS FROM {$issues}" ), true ), 'Column refused in this step' );
+			icheck( '1' === get_option( 'mltsa_db_version' ) && ! Installer::schema_ready(), 'Version not recorded after a refused upgrade: ' . get_option( 'mltsa_db_version' ) );
+
+			Installer::create_tables();
+			icheck( '' === $wpdb->last_error, 'Upgrade ran without a database error: ' . $wpdb->last_error );
+			$after = $wpdb->get_col( "SHOW COLUMNS FROM {$issues}" );
+			icheck( in_array( 'evidence', $after, true ), 'evidence column added: ' . implode( ',', $after ) );
+			icheck( MLTSA_DB_VERSION === get_option( 'mltsa_db_version' ), 'Version recorded: ' . get_option( 'mltsa_db_version' ) );
+			$kept = $wpdb->get_row( "SELECT * FROM {$issues}", ARRAY_A );
+			foreach ( $row as $key => $value ) {
+				icheck( (string) $value === (string) $kept[ $key ], "{$key} kept: " . $kept[ $key ] );
+			}
+			icheck( '' === (string) $kept['evidence'], 'Existing issue has empty evidence, which reconciliation treats as "stored before evidence"' );
+			icheck( 1 === (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$issues}" ), 'One row' );
+			$wpdb->update( $issues, array( 'evidence' => '["upgrade-test"]' ), array( 'id' => (int) $kept['id'] ) );
+
+			// Twice is harmless: no error, same columns, same row.
+			Installer::create_tables();
+			icheck( '' === $wpdb->last_error, 'Second run without error: ' . $wpdb->last_error );
+			icheck( $after === $wpdb->get_col( "SHOW COLUMNS FROM {$issues}" ), 'Same columns after a second run' );
+			$again = $wpdb->get_row( "SELECT * FROM {$issues}", ARRAY_A );
+			icheck( '["upgrade-test"]' === $again['evidence'] && 'in_progress' === $again['work_status'] && 1 === (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$issues}" ), 'Data unchanged by a second run' );
+			$dup = $wpdb->insert( $issues, array( 'issue_key' => sha1( 'upgrade-test' ), 'rule_id' => 'FACT-001', 'evidence' => '', 'exception_reason' => '' ) );
+			icheck( false === $dup, 'The unique issue_key index survived the upgrade' );
+		} finally {
+			foreach ( Installer::TABLES as $suffix ) {
+				$wpdb->query( 'DROP TABLE IF EXISTS ' . Installer::table( $suffix ) );
+			}
+			$wpdb->prefix = $real_prefix;
+			update_option( 'mltsa_db_version', $saved_version, false );
+		}
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }
