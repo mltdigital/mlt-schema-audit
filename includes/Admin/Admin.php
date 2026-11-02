@@ -221,6 +221,11 @@ class Admin {
 		if ( isset( $filter['rule_id'] ) ) {
 			$filter['rule_id'] = strtoupper( $filter['rule_id'] );
 		}
+		// Search is sanitised as the findings screen does, and kept when it is "0".
+		$search = isset( $_REQUEST['search'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['search'] ) ) : '';
+		if ( '' !== $search ) {
+			$filter['search'] = $search;
+		}
 		$exporter = new Exporter( $run, $filter );
 		$repo->log_event(
 			'export',

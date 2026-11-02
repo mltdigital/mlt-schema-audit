@@ -19,8 +19,9 @@ Two code reviews on 30 October found defects to fix before any pilot. Fixed so f
 - Commented-out JSON-LD (review finding 8): the extractor searched the raw HTML for script tags, so a block inside an HTML comment, a textarea, template, noscript, xmp, title, style or iframe, after a plaintext tag, or inside a quoted attribute value was audited as live markup. The scan now follows the HTML tokeniser's rules for those contexts, including unterminated comments, `-->` and `--!>`, and a `>` inside a quoted attribute of the script tag itself. Real script content is still read as raw text.
 - CDATA wrappers (second review, ENG-1): a block wrapped as `/* <![CDATA[ */ ... /* ]]> */`, as older plugins emit, is now unwrapped and parsed. `//<![CDATA[` and plain `<![CDATA[` forms still work.
 - Split definitions (second review, ENG-2): properties of one @id defined in several blocks were merged with array union, so a multi-valued property (sameAs, telephone, address, identifier and similar) kept only the first block's value and rules never saw the rest, such as a Companies House link in a second block. Multi-valued properties are now combined across definitions without repeats; single-valued ones (name, legalName, url, description) are unchanged and keep the first value.
+- Filtered exports (review finding 10): the Findings screen's download link and the export handler left the search box out, so a searched view downloaded every finding, and a search on its own was labelled a full export. The sanitised search now goes through the link, the handler, the findings CSV, the summary and the manifest. A search for `0` is now applied (it was ignored). A display group with no rules now exports nothing, as on the screen, instead of everything.
 
-Still open: findings 7 to 10 of the first review and the confirmed items of the second (see `STATE.md` in the project folder).
+Still open: finding 9 of the first review and the remaining confirmed items of the second (see `STATE.md` in the project folder).
 
 ### Stage 7: documents and release build
 

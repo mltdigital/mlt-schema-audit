@@ -534,6 +534,55 @@ itest(
 );
 
 itest(
+	'Review 10 a searched export holds the findings the screen shows, and says it is filtered',
+	static function () use ( $hostile_url, $admin ) {
+		finish_active_runs();
+		$id = Scheduler::start_recheck( $admin, array( $hostile_url ) );
+		( new Worker() )->process( $id, 60 );
+		$repo = new Repository();
+		icheck( 'complete' === $repo->get_run( $id )['state'], 'Run complete' );
+		$all = $repo->findings( $id, array(), 0 );
+		icheck( count( $all ) >= 2, 'The run has findings to filter' );
+		$term = '960999';
+		$want = array();
+		foreach ( $repo->findings( $id, array( 'search' => $term ), 0 ) as $f ) {
+			$want[] = (int) $f['id'];
+		}
+		icheck( ! empty( $want ) && count( $want ) < count( $all ), 'The search matches some findings, not all' );
+
+		list( $cookie, $nonce ) = session_for( $admin );
+		$ids = static function ( $csv ) {
+			$rows = array_map( 'str_getcsv', preg_split( '/\r?\n/', trim( preg_replace( '/^\xEF\xBB\xBF/', '', $csv ) ) ) );
+			array_shift( $rows );
+			return array_map( 'intval', array_column( $rows, 0 ) );
+		};
+		$url = '/wp-admin/admin-post.php?action=mltsa_export&run=' . $id . '&_wpnonce=' . $nonce['mltsa_export'];
+
+		$r = http( 'GET', $url . '&file=findings&search=' . rawurlencode( $term ), $cookie );
+		$got = $ids( $r['body'] );
+		sort( $got );
+		sort( $want );
+		icheck( $got === $want, 'Exported finding IDs match the search: ' . implode( ',', $got ) . ' vs ' . implode( ',', $want ) );
+
+		$r = http( 'GET', $url . '&file=summary&search=' . rawurlencode( $term ), $cookie );
+		icheck( false !== strpos( $r['body'], 'Filtered' ) && false !== strpos( $r['body'], $term ), 'Search alone is labelled a filtered export' );
+
+		$r = http( 'GET', $url . '&file=findings', $cookie );
+		icheck( count( $ids( $r['body'] ) ) === count( $all ), 'Without a search the export is full' );
+
+		// Tags are stripped as on the screen, and a search of "0" is a search.
+		$r = http( 'GET', $url . '&file=summary&search=' . rawurlencode( '<b>' . $term . '</b>' ), $cookie );
+		icheck( false === strpos( $r['body'], '<b>' ), 'Search is sanitised like the screen' );
+		$r = http( 'GET', $url . '&file=summary&search=0', $cookie );
+		icheck( false !== strpos( $r['body'], 'Filtered' ), 'A search for 0 is kept' );
+
+		// The screen's download link carries the search.
+		$page = http( 'GET', '/wp-admin/admin.php?page=mltsa-findings&run=' . $id . '&s=' . rawurlencode( $term ), $cookie );
+		icheck( false !== strpos( $page['body'], 'filtered view' ) && 1 === preg_match( '/mltsa_export[^"]*search=' . $term . '/', $page['body'] ), 'The ZIP link on the filtered screen carries the search' );
+	}
+);
+
+itest(
 	'A2 A3 A4 every screen and handler refuses anonymous users, subscribers, editors and administrators without the capability',
 	static function () use ( $admin ) {
 		$repo   = new Repository();

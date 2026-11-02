@@ -521,7 +521,7 @@ class Repository {
 			$where[] = 'o.rule_id IN (' . implode( ',', array_fill( 0, count( $filter['rule_ids'] ), '%s' ) ) . ')';
 			$args    = array_merge( $args, array_values( $filter['rule_ids'] ) );
 		}
-		if ( ! empty( $filter['search'] ) ) {
+		if ( isset( $filter['search'] ) && '' !== (string) $filter['search'] ) {
 			$where[] = '(u.url LIKE %s OR u.title LIKE %s OR o.observed LIKE %s)';
 			$like    = '%' . $wpdb->esc_like( (string) $filter['search'] ) . '%';
 			$args[]  = $like;

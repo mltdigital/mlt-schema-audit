@@ -209,7 +209,11 @@ class Exporter {
 	private function findings() {
 		$filter = $this->filter;
 		if ( ! empty( $filter['display'] ) ) {
+			// As on the findings screen: a group with no rules matches nothing, not everything.
 			$filter['rule_ids'] = self::rules_in_display( $filter['display'] );
+			if ( empty( $filter['rule_ids'] ) ) {
+				$filter['rule_ids'] = array( '-' );
+			}
 		}
 		$findings = $this->repo->findings( (int) $this->run['id'], $filter, 0 );
 		$notes    = Issues::latest_notes( array_filter( array_column( $findings, 'issue_id' ) ) );

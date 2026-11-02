@@ -441,9 +441,11 @@ class Views {
 		$total           = $repo->count_findings( $run_id, $query );
 		$rows            = $repo->findings( $run_id, $query, self::PER_PAGE, ( $paged - 1 ) * self::PER_PAGE );
 		$filtered        = array_filter( $filter, 'strlen' );
+		// The export carries the search too, so it holds what the screen shows.
+		$export_filter = array_filter( array_merge( $filter, array( 'search' => $search ) ), 'strlen' );
 
 		echo '<p>' . esc_html( sprintf( '%d findings in audit #%d (%s).', $total, $run_id, Labels::of( Labels::RUN_STATES, $run['state'] ) ) ) . ' ';
-		echo '<a href="' . esc_url( self::export_url( $run_id, 'zip', $filtered ) ) . '">' . esc_html( empty( $filtered ) ? 'Download ZIP' : 'Download ZIP of this filtered view' ) . '</a></p>';
+		echo '<a href="' . esc_url( self::export_url( $run_id, 'zip', $export_filter ) ) . '">' . esc_html( empty( $export_filter ) ? 'Download ZIP' : 'Download ZIP of this filtered view' ) . '</a></p>';
 		if ( 'complete' !== $run['state'] ) {
 			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'This audit did not read every page, so pages it missed show no findings. That is not an all-clear.', 'mlt-schema-audit' ) . '</p></div>';
 		}
