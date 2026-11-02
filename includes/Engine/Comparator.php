@@ -186,8 +186,20 @@ class Comparator {
 					$out['unavailable'][] = $key;
 					continue;
 				}
+				if ( 'outside' === $evidence ) {
+					// An evidence page may still be on the site but is outside
+					// this audit: never cleared, held as unavailable so the
+					// coverage figure counts it (owner decision, R2).
+					if ( 'unavailable' !== $issue['verification_state'] ) {
+						$out['update'][ $key ] = array( 'verification_state' => 'unavailable' );
+						$out['events'][]       = array( $key, 'held_outside_scope', 'A page this issue rests on is outside the audit (post type not audited, over the page limit, excluded, or no longer listed), so it can be neither confirmed nor cleared.' );
+					}
+					++$out['summary']['unavailable'];
+					$out['unavailable'][] = $key;
+					continue;
+				}
 				if ( 'missing' === $evidence ) {
-					continue; // Evidence excluded or left out of this run, but still on the site: untouched.
+					continue; // No page evidence at all: untouched.
 				}
 				if ( ! $rule_same ) {
 					++$out['summary']['rule_change_held'];
@@ -309,15 +321,15 @@ class Comparator {
 	 * including a page no longer published at all ($gone), and every
 	 * resource was checked or is no longer referenced by any page read.
 	 * "unknown": a page or resource could not be read (timeout, error,
-	 * pending, over the resource cap). "missing": a page still on the site
-	 * is outside this run (excluded, over the URL cap, or its post type out
-	 * of scope), or there is no evidence.
+	 * pending, over the resource cap). "outside": a page that may still be
+	 * on the site is outside this run (excluded, over the URL cap, post type
+	 * out of scope, or not listed). "missing": no page evidence at all.
 	 *
 	 * @param array $refs      Page url_keys and resource:<url> refs.
 	 * @param array $pages     url_key => coverage for this run.
 	 * @param array $resources Resource URL => check outcome, for every resource a page read in this run references.
 	 * @param array $gone      url_key => true for pages that have left the site.
-	 * @return string read|unknown|missing
+	 * @return string read|unknown|outside|missing
 	 */
 	public static function evidence_state( array $refs, array $pages, array $resources, array $gone = array() ) {
 		$settled = array_merge( self::EVALUATED, self::REMOVED );
@@ -342,8 +354,11 @@ class Comparator {
 				++$held;
 			}
 		}
+		if ( $held > 0 ) {
+			return 'outside';
+		}
 		// Every finding rests on at least one page, so no page ref means no evidence.
-		return ( $read > 0 && 0 === $held ) ? 'read' : 'missing';
+		return $read > 0 ? 'read' : 'missing';
 	}
 
 	/**

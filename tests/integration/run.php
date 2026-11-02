@@ -1610,8 +1610,13 @@ itest(
 				return $wpdb->get_var( $wpdb->prepare( "SELECT verification_state FROM {$table} WHERE id = %d", $id ) );
 			};
 			icheck( 'no_longer_detected' === $state( $id_dup ), 'Evidence page unpublished, the other read: cleared, ' . $state( $id_dup ) );
-			icheck( 'present' === $state( $id_news ), 'Evidence page still published but outside the post types: held, ' . $state( $id_news ) );
-			icheck( 'no_longer_detected' !== $state( $id_map ), 'Sitemap-only evidence URL, sitemap discovery off: not cleared, ' . $state( $id_map ) );
+			icheck( 'unavailable' === $state( $id_news ), 'Evidence page still published but outside the post types: held as unavailable, ' . $state( $id_news ) );
+			icheck( 'unavailable' === $state( $id_map ), 'Sitemap-only evidence URL, sitemap discovery off: held as unavailable, ' . $state( $id_map ) );
+			$why = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Installer::table( 'events' ) . " WHERE event_type = 'held_outside_scope' AND object_id IN (%d, %d)", $id_news, $id_map ) );
+			icheck( 2 === $why, 'Each has an event saying why it is held: ' . $why );
+			$last = $repo->runs( 1 )[0];
+			$sum  = Repository::decode( $last['summary'] );
+			icheck( isset( $sum['unavailable_streaks'][ $id_news ], $sum['unavailable_streaks'][ $id_map ] ), 'Both feed the repeated-unavailable figure: ' . wp_json_encode( isset( $sum['unavailable_streaks'] ) ? $sum['unavailable_streaks'] : null ) );
 		} finally {
 			finish_active_runs();
 			wp_delete_post( $about, true );

@@ -271,7 +271,7 @@ class Views {
 					echo '<a href="' . esc_url( self::url( 'mltsa-findings', array( 'issue' => (int) $issue_id ) ) ) . '">' . esc_html( sprintf( '#%d (%d audits)', (int) $issue_id, $n ) ) . '</a> ';
 				}
 				echo '</p>';
-				echo '<p class="description">' . esc_html__( 'These findings could not be confirmed or cleared in several audits in a row, so part of the site is not being checked. Look at why their pages or images could not be read. This figure does not change their status.', 'mlt-schema-audit' ) . '</p>';
+				echo '<p class="description">' . esc_html__( 'These findings could not be confirmed or cleared in several audits in a row, so part of the site is not being checked. Look at why their pages or images could not be read, or whether a page they rest on is outside the audit (see each issue's history). This figure does not change their status.', 'mlt-schema-audit' ) . '</p>';
 			}
 		}
 		if ( ! empty( $scope['excluded_by_reason'] ) || ! empty( $scope['status_exclusions'] ) || ! empty( $scope['sitemaps_not_read'] ) ) {

@@ -75,10 +75,20 @@ mltsa_test(
 );
 
 mltsa_test(
-	'Review 2: a narrowed scope (supporting page excluded or not discovered) leaves the issue untouched',
+	'Review 2 and owner decision R2: a narrowed scope (supporting page excluded or not discovered) never clears the issue; it is held as unavailable',
 	static function () {
 		$issue = site_issue( array( 'firm.example/about', 'firm.example/team/jane' ) );
-		check_same( null, reconcile_one( $issue, array( 'firm.example/about' => 'ok' ) ), 'Page outside this run' );
+		check_same( 'unavailable', reconcile_one( $issue, array( 'firm.example/about' => 'ok' ) ), 'Page outside this run' );
+		$fp  = array( 'SITE-001' => 1 );
+		$out = Comparator::reconcile( array( 'k' => $issue ), array(), array( 'firm.example/about' => 'ok' ), $fp, $fp, true );
+		check_same( array( 'k' ), $out['unavailable'], 'Counted for the repeated-unavailable figure' );
+		check_same( 1, $out['summary']['unavailable'], 'In the register summary' );
+		check_same( 0, $out['summary']['no_longer_detected'], 'Not cleared' );
+		check_same( 'held_outside_scope', $out['events'][0][1], 'An event says why it is held' );
+		$issue['verification_state'] = 'unavailable';
+		$again = Comparator::reconcile( array( 'k' => $issue ), array(), array( 'firm.example/about' => 'ok' ), $fp, $fp, true );
+		check( ! isset( $again['update']['k'] ) && array() === $again['events'] && array( 'k' ) === $again['unavailable'], 'Already unavailable: no update, no repeat event, still counted' );
+		$issue['verification_state'] = 'present';
 		check_same( null, reconcile_one( $issue, array( 'firm.example/about' => 'ok', 'firm.example/team/jane' => 'ok' ), array(), false ), 'Recheck of listed URLs never touches site-wide issues' );
 		check_same( 'unavailable', reconcile_one( $issue, array( 'firm.example/about' => 'timeout' ) ), 'Unknown outranks missing' );
 	}
@@ -313,7 +323,7 @@ mltsa_test(
 	static function () {
 		$issue = site_issue( array( 'firm.example/about', 'firm.example/old-duplicate' ) );
 		$pages = array( 'firm.example' => 'ok', 'firm.example/about' => 'ok' );
-		check_same( null, reconcile_one( $issue, $pages ), 'Not listed and not known to be gone: held, as finding 2 requires' );
+		check_same( 'unavailable', reconcile_one( $issue, $pages ), 'Not listed and not known to be gone: held as unavailable, never cleared' );
 		$fp  = array( 'SITE-001' => 1 );
 		$out = Comparator::reconcile( array( 'k' => $issue ), array(), $pages, $fp, $fp, true, array(), array( 'firm.example/old-duplicate' => true ) );
 		check_same( 'no_longer_detected', $out['update']['k']['verification_state'], 'Unpublished or deleted page settles its part' );
@@ -322,7 +332,7 @@ mltsa_test(
 		$pages['firm.example/old-duplicate'] = 'not_html';
 		check_same( 'no_longer_detected', reconcile_one( $issue, $pages ), 'A page read as not HTML carries no JSON-LD: settled' );
 		check_same( 'read', Comparator::evidence_state( array( 'firm.example/gone' ), array(), array(), array( 'firm.example/gone' => true ) ), 'Only gone pages: read' );
-		check_same( 'missing', Comparator::evidence_state( array( 'firm.example/gone' ), array(), array(), array( 'firm.example/other' => true ) ), 'Gone list is per page' );
+		check_same( 'outside', Comparator::evidence_state( array( 'firm.example/gone' ), array(), array(), array( 'firm.example/other' => true ) ), 'Gone list is per page' );
 
 		$base = array(
 			'findings'    => array( 'k' => array( 'hash' => 'h', 'rule_id' => 'SITE-001', 'page' => '', 'refs' => array( 'firm.example/about', 'firm.example/old-duplicate' ) ) ),
