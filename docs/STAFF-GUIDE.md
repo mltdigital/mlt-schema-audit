@@ -65,6 +65,7 @@ Only the scanner sets the **verification state**: Present, Changed, Returned, No
 - Marking a finding **Resolved** does not verify it. To confirm a fix, tick the finding and select **Recheck**, or wait for the next monthly audit.
 - A timeout, an excluded page, a removed rule or a smaller scope never sets "No longer detected".
 - A site-wide issue (one business shown differently on different pages, a broken image, and similar) is set to "No longer detected" only when every page it was seen on was read again. If one of those pages could not be read, it shows "Unavailable" until a later audit reads it.
+- "Unavailable" is a coverage problem, not a stable result. Each audit screen and export Summary shows how many findings were held as Unavailable in that audit, and how many have been Unavailable in 2 or more audits in a row, with links to them. If that number is not zero, find out why those pages or images cannot be read. The figure never changes a finding's status.
 - "New because a rule changed" means the audit changed, not the website.
 
 ## Exports

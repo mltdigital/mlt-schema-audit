@@ -782,6 +782,25 @@ class Worker {
 			}
 		}
 
+		// Coverage figure (read-only): how many audits in a row each issue
+		// has been held as unavailable, so repeated "unavailable" shows up
+		// as a coverage problem and not as quiet stability.
+		$unavailable_ids = array();
+		foreach ( $result['unavailable'] as $key ) {
+			$unavailable_ids[] = (int) $issues[ $key ]['id'];
+		}
+		$still = array();
+		foreach ( $issues as $key => $issue ) {
+			$state = isset( $result['update'][ $key ]['verification_state'] ) ? $result['update'][ $key ]['verification_state'] : $issue['verification_state'];
+			if ( 'unavailable' === $state && ! isset( $current[ $key ] ) ) {
+				$still[] = (int) $issue['id'];
+			}
+		}
+		$previous                       = $this->repo->previous_finished_summary( $run_id );
+		$streaks                        = Comparator::unavailable_streaks( isset( $previous['unavailable_streaks'] ) ? (array) $previous['unavailable_streaks'] : array(), $unavailable_ids, $still );
+		$summary['unavailable_streaks'] = $streaks;
+		$summary['repeat_unavailable']  = Comparator::repeat_unavailable( $streaks, $unavailable_ids );
+
 		unset( $summary['resource_outcomes'] );
 		$summary['register']    = $result['summary'];
 		$summary['coverage']    = $this->repo->coverage_counts( $run_id );

@@ -1229,6 +1229,63 @@ itest(
 	}
 );
 
+itest(
+	'Review reply: findings held as unavailable in audits in a row show as a coverage figure on the audit screen and in the export, and keep their state',
+	static function () use ( $admin, $hostile_url ) {
+		global $wpdb;
+		$repo = new Repository();
+		finish_active_runs();
+		reset_settings( array( 'timeout' => 15 ) );
+		$id = Scheduler::start_recheck( $admin, array( $hostile_url ) );
+		( new Worker() )->process( $id, 60 );
+		$key   = MLT\SchemaAudit\Engine\Evaluator::url_key( $hostile_url );
+		$ids   = array_map( 'intval', $wpdb->get_col( $wpdb->prepare( "SELECT DISTINCT issue_id FROM {$wpdb->prefix}mltsa_occurrences WHERE run_id = %d AND issue_id > 0", $id ) ) );
+		icheck( count( $ids ) > 0, 'The page has issues' );
+		$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->prefix}mltsa_issues SET work_status = 'in_progress' WHERE id = %d", $ids[0] ) );
+
+		$runs = array();
+		for ( $i = 1; $i <= 2; $i++ ) {
+			$rid = Scheduler::start_recheck( $admin, array( $hostile_url ) );
+			( new Worker( timing_out_client(), static function () {} ) )->process( $rid, 60 );
+			$runs[ $i ] = $repo->get_run( $rid );
+			icheck( in_array( $runs[ $i ]['state'], array( 'failed', 'partial' ), true ), "Audit {$i} could not read the page: " . $runs[ $i ]['state'] );
+		}
+		$one = Repository::decode( $runs[1]['summary'] );
+		$two = Repository::decode( $runs[2]['summary'] );
+		icheck( count( $ids ) === (int) $one['register']['unavailable'] && 0 === (int) $one['repeat_unavailable']['issues'], 'First audit: unavailable once, not yet repeated: ' . wp_json_encode( $one['repeat_unavailable'] ) );
+		icheck( count( $ids ) === (int) $two['repeat_unavailable']['issues'] && 2 === (int) $two['repeat_unavailable']['longest'], 'Second audit: every issue unavailable twice in a row: ' . wp_json_encode( $two['repeat_unavailable'] ) );
+		$listed = $two['repeat_unavailable']['ids'];
+		sort( $listed );
+		$expect = $ids;
+		sort( $expect );
+		icheck( $expect === $listed, 'Which issues: ' . wp_json_encode( $listed ) );
+
+		// Read-only: states as reconciliation set them, work status untouched.
+		$states = $wpdb->get_results( 'SELECT id, verification_state, work_status FROM ' . $wpdb->prefix . 'mltsa_issues WHERE id IN (' . implode( ',', $ids ) . ')', ARRAY_A );
+		foreach ( $states as $row ) {
+			icheck( 'unavailable' === $row['verification_state'], 'Still unavailable: ' . $row['id'] );
+			icheck( ( (int) $row['id'] === $ids[0] ? 'in_progress' : 'open' ) === $row['work_status'], 'Work status untouched: ' . $row['id'] . ' ' . $row['work_status'] );
+		}
+
+		list( $cookie ) = session_for( $admin );
+		$screen = http( 'GET', '/wp-admin/admin.php?page=mltsa&run=' . (int) $runs[2]['id'], $cookie );
+		icheck( false !== strpos( $screen['body'], 'Unavailable in 2 or more audits in a row: ' . count( $ids ) ), 'Audit screen shows the figure' );
+		icheck( false !== strpos( $screen['body'], 'issue=' . $ids[0] ) && false !== strpos( $screen['body'], '#' . $ids[0] . ' (2 audits)' ), 'And links each issue' );
+		$csv = ( new MLT\SchemaAudit\Export\Exporter( $runs[2] ) )->csv( 'summary' );
+		icheck( false !== strpos( $csv, '"Findings: Unavailable in 2 or more audits in a row","' . count( $ids ) . '"' ), 'Export summary carries it: ' . substr( $csv, 0, 0 ) );
+		icheck( false !== strpos( $csv, '"Findings: unavailable in a row, issue IDs","' . implode( ' ', $two['repeat_unavailable']['ids'] ) . '"' ), 'With the issue IDs' );
+
+		// Read again: the figure drops to zero.
+		$rid = Scheduler::start_recheck( $admin, array( $hostile_url ) );
+		( new Worker() )->process( $rid, 60 );
+		$three = Repository::decode( $repo->get_run( $rid )['summary'] );
+		icheck( 0 === (int) $three['repeat_unavailable']['issues'] && array() === (array) $three['unavailable_streaks'], 'Page read again: nothing unavailable: ' . wp_json_encode( $three['repeat_unavailable'] ) );
+		$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->prefix}mltsa_issues SET work_status = 'open' WHERE id = %d", $ids[0] ) );
+		finish_active_runs();
+		reset_settings();
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }

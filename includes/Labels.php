@@ -111,6 +111,15 @@ class Labels {
 	);
 
 	/**
+	 * Coverage figure for findings that could not be checked (read-only).
+	 */
+	const REPEAT_UNAVAILABLE = array(
+		'this_run' => 'Held as unavailable in this audit',
+		'issues'   => 'Unavailable in %d or more audits in a row',
+		'longest'  => 'Longest run of audits unavailable',
+	);
+
+	/**
 	 * The coverage statement every report and screen carries (section 4).
 	 */
 	const COVERAGE_STATEMENT = 'Server-response JSON-LD audit. Microdata and RDFa are detected but not validated. Markup added by JavaScript after the page loads is not seen. "No JSON-LD detected" does not mean "no structured data".';

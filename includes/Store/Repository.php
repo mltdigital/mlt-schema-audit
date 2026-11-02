@@ -255,6 +255,19 @@ class Repository {
 		return $row ? $row : null;
 	}
 
+	/**
+	 * Summary of the most recent run before this one that finished its
+	 * comparison (complete, partial or failed), of any type.
+	 *
+	 * @param int $run_id Run ID.
+	 * @return array
+	 */
+	public function previous_finished_summary( $run_id ) {
+		global $wpdb;
+		$summary = $wpdb->get_var( $wpdb->prepare( "SELECT summary FROM {$this->t( 'runs' )} WHERE id < %d AND state IN ('complete','partial','failed') ORDER BY id DESC LIMIT 1", (int) $run_id ) );
+		return self::decode( (string) $summary );
+	}
+
 	/* -------------------------------------------------------------- Run URLs */
 
 	/**

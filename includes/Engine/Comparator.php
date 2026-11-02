@@ -43,6 +43,12 @@ class Comparator {
 	const UNKNOWN = array( 'timeout', 'error', 'unavailable', 'blocked', 'too_large', 'http_error', 'redirect_limit', 'pending' );
 
 	/**
+	 * Audits in a row an issue must be held as unavailable before the
+	 * coverage figure counts it as repeatedly unchecked.
+	 */
+	const REPEAT_UNAVAILABLE = 2;
+
+	/**
 	 * Stable identity for an issue: site-wide issues by rule, entity and
 	 * property; page issues also by page path. @graph positions are removed
 	 * from the JSON path so reordering nodes does not create a new issue.
@@ -82,14 +88,16 @@ class Comparator {
 	 * @param array  $prior_fingerprint rule_id => version of the previous comparable run, or empty.
 	 * @param bool   $full_scope   Whether this run covered the full scope (site-wide rules ran).
 	 * @param array  $resources    Resource URL => check outcome, for every resource a page read in this run references.
-	 * @return array { insert: issue_key => fields, update: issue_key => fields, events: list, summary }
+	 * @return array { insert: issue_key => fields, update: issue_key => fields, events: list,
+	 *                 unavailable: issue keys held as unavailable in this run, summary }
 	 */
 	public static function reconcile( array $issues, array $findings, array $pages, array $fingerprint, array $prior_fingerprint, $full_scope, array $resources = array() ) {
 		$out = array(
-			'insert'  => array(),
-			'update'  => array(),
-			'events'  => array(),
-			'summary' => array(
+			'insert'      => array(),
+			'update'      => array(),
+			'events'      => array(),
+			'unavailable' => array(),
+			'summary'     => array(
 				'new'                => 0,
 				'new_rule_change'    => 0,
 				'returned'           => 0,
@@ -166,6 +174,7 @@ class Comparator {
 						$out['update'][ $key ] = array( 'verification_state' => 'unavailable' );
 					}
 					++$out['summary']['unavailable'];
+					$out['unavailable'][] = $key;
 					continue;
 				}
 				if ( 'missing' === $evidence ) {
@@ -200,9 +209,66 @@ class Comparator {
 					$out['update'][ $key ] = array( 'verification_state' => 'unavailable' );
 				}
 				++$out['summary']['unavailable'];
+				$out['unavailable'][] = $key;
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * How many audits in a row each issue has been held as unavailable.
+	 * Read-only bookkeeping for the coverage figure: it never changes an
+	 * issue's state.
+	 *
+	 * @param array $previous    Issue ID => audits in a row, from the last finished run.
+	 * @param array $unavailable Issue IDs held as unavailable in this run.
+	 * @param array $still       Issue IDs still unavailable but outside this run's scope (carried over).
+	 * @return array Issue ID => audits in a row.
+	 */
+	public static function unavailable_streaks( array $previous, array $unavailable, array $still ) {
+		$out = array();
+		foreach ( $unavailable as $id ) {
+			$id         = (int) $id;
+			$out[ $id ] = ( isset( $previous[ $id ] ) ? (int) $previous[ $id ] : 0 ) + 1;
+		}
+		foreach ( $still as $id ) {
+			$id = (int) $id;
+			if ( ! isset( $out[ $id ] ) && isset( $previous[ $id ] ) ) {
+				$out[ $id ] = (int) $previous[ $id ];
+			}
+		}
+		ksort( $out );
+		return $out;
+	}
+
+	/**
+	 * The coverage figure: issues held as unavailable in this run for at
+	 * least REPEAT_UNAVAILABLE audits in a row, longest first.
+	 *
+	 * @param array $streaks     Issue ID => audits in a row.
+	 * @param array $unavailable Issue IDs held as unavailable in this run.
+	 * @return array { min_runs, issues, longest, ids (at most 50) }
+	 */
+	public static function repeat_unavailable( array $streaks, array $unavailable ) {
+		$hits = array();
+		foreach ( $unavailable as $id ) {
+			$id = (int) $id;
+			if ( isset( $streaks[ $id ] ) && $streaks[ $id ] >= self::REPEAT_UNAVAILABLE ) {
+				$hits[ $id ] = (int) $streaks[ $id ];
+			}
+		}
+		uksort(
+			$hits,
+			static function ( $a, $b ) use ( $hits ) {
+				return $hits[ $b ] === $hits[ $a ] ? $a - $b : $hits[ $b ] - $hits[ $a ];
+			}
+		);
+		return array(
+			'min_runs' => self::REPEAT_UNAVAILABLE,
+			'issues'   => count( $hits ),
+			'longest'  => empty( $hits ) ? 0 : max( $hits ),
+			'ids'      => array_slice( array_keys( $hits ), 0, 50 ),
+		);
 	}
 
 	/**

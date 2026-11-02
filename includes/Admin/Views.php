@@ -249,6 +249,26 @@ class Views {
 				echo '<p class="description">' . esc_html__( 'An image that was not checked (blocked, timed out, unavailable or over the per-audit limit) cannot show that a broken image was fixed, so its issue stays open.', 'mlt-schema-audit' ) . '</p>';
 			}
 		}
+		if ( isset( $summary['repeat_unavailable'] ) && is_array( $summary['repeat_unavailable'] ) ) {
+			$repeat  = $summary['repeat_unavailable'];
+			$streaks = isset( $summary['unavailable_streaks'] ) ? (array) $summary['unavailable_streaks'] : array();
+			echo '<h3>' . esc_html__( 'Findings that could not be checked', 'mlt-schema-audit' ) . '</h3><ul class="mltsa-list">';
+			echo '<li>' . esc_html( Labels::REPEAT_UNAVAILABLE['this_run'] . ': ' . ( isset( $summary['register']['unavailable'] ) ? (int) $summary['register']['unavailable'] : 0 ) ) . '</li>';
+			echo '<li>' . esc_html( sprintf( Labels::REPEAT_UNAVAILABLE['issues'], (int) $repeat['min_runs'] ) . ': ' . (int) $repeat['issues'] ) . '</li>';
+			if ( (int) $repeat['issues'] > 0 ) {
+				echo '<li>' . esc_html( Labels::REPEAT_UNAVAILABLE['longest'] . ': ' . (int) $repeat['longest'] ) . '</li>';
+			}
+			echo '</ul>';
+			if ( ! empty( $repeat['ids'] ) ) {
+				echo '<p>';
+				foreach ( (array) $repeat['ids'] as $issue_id ) {
+					$n = isset( $streaks[ $issue_id ] ) ? (int) $streaks[ $issue_id ] : 0;
+					echo '<a href="' . esc_url( self::url( 'mltsa-findings', array( 'issue' => (int) $issue_id ) ) ) . '">' . esc_html( sprintf( '#%d (%d audits)', (int) $issue_id, $n ) ) . '</a> ';
+				}
+				echo '</p>';
+				echo '<p class="description">' . esc_html__( 'These findings could not be confirmed or cleared in several audits in a row, so part of the site is not being checked. Look at why their pages or images could not be read. This figure does not change their status.', 'mlt-schema-audit' ) . '</p>';
+			}
+		}
 		if ( ! empty( $scope['excluded_by_reason'] ) || ! empty( $scope['status_exclusions'] ) ) {
 			echo '<h3>' . esc_html__( 'Left out, with reasons', 'mlt-schema-audit' ) . '</h3><ul class="mltsa-list">';
 			foreach ( array_merge( (array) ( isset( $scope['excluded_by_reason'] ) ? $scope['excluded_by_reason'] : array() ), (array) ( isset( $scope['status_exclusions'] ) ? $scope['status_exclusions'] : array() ) ) as $reason => $n ) {

@@ -239,3 +239,48 @@ mltsa_test(
 		check_same( array(), $result['resolved'], 'Nothing resolved' );
 	}
 );
+
+mltsa_test(
+	'Review reply: repeated "unavailable" is counted per issue across audits in a row, without changing any issue state',
+	static function () {
+		$page  = array(
+			'id'                 => 7,
+			'page_url'           => 'https://firm.example/about/',
+			'site_wide'          => '0',
+			'rule_id'            => 'FACT-001',
+			'rule_version'       => 1,
+			'entity_key'         => '',
+			'verification_state' => 'unavailable',
+			'work_status'        => 'in_progress',
+			'observed_hash'      => 'h',
+			'evidence'           => '',
+		);
+		$site  = site_issue( array( 'firm.example/about' ) );
+		$fp    = array( 'FACT-001' => 1, 'SITE-001' => 1 );
+		$out   = Comparator::reconcile( array( 'p' => $page, 's' => $site ), array(), array( 'firm.example/about' => 'timeout' ), $fp, $fp, true );
+		check_same( array( 'p', 's' ), $out['unavailable'], 'Both issues listed as unavailable in this run' );
+		check( ! isset( $out['update']['p'] ), 'An issue already unavailable gets no update' );
+		check_same( array( 'verification_state' => 'unavailable' ), $out['update']['s'], 'The other only moves to unavailable, as before' );
+
+		// Audits in a row: 1, then 2, carried over while out of scope, reset once read.
+		$first = Comparator::unavailable_streaks( array(), array( 7, 1 ), array() );
+		check_same( array( 1 => 1, 7 => 1 ), $first, 'First audit' );
+		$second = Comparator::unavailable_streaks( $first, array( 7 ), array( 1 ) );
+		check_same( array( 1 => 1, 7 => 2 ), $second, 'Issue 7 twice in a row; issue 1 outside the run keeps its count' );
+		$third = Comparator::unavailable_streaks( $second, array( 7, 9 ), array() );
+		check_same( array( 7 => 3, 9 => 1 ), $third, 'Issue 1 read again (no longer unavailable) is dropped; 9 starts at 1' );
+
+		$fig = Comparator::repeat_unavailable( $third, array( 7, 9 ) );
+		check_same( array( 'min_runs' => 2, 'issues' => 1, 'longest' => 3, 'ids' => array( 7 ) ), $fig, 'Figure counts only issues unavailable in this run for 2 or more audits' );
+		$none = Comparator::repeat_unavailable( $second, array() );
+		check_same( 0, $none['issues'], 'An issue only carried over is not counted for this run' );
+		$many = array();
+		for ( $i = 1; $i <= 60; $i++ ) {
+			$many[ $i ] = 2 + ( $i % 5 );
+		}
+		$big = Comparator::repeat_unavailable( $many, array_keys( $many ) );
+		check_same( 60, $big['issues'], 'All counted' );
+		check_same( 50, count( $big['ids'] ), 'At most 50 IDs listed' );
+		check_same( 6, $many[ $big['ids'][0] ], 'Longest first' );
+	}
+);

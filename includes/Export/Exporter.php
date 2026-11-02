@@ -171,6 +171,13 @@ class Exporter {
 		foreach ( isset( $summary['resource_checks'] ) ? (array) $summary['resource_checks'] : array() as $key => $n ) {
 			$rows[] = array( 'Images and logos: ' . Labels::of( Labels::RESOURCE_CHECKS, $key ), (int) $n );
 		}
+		if ( isset( $summary['repeat_unavailable'] ) && is_array( $summary['repeat_unavailable'] ) ) {
+			$repeat = $summary['repeat_unavailable'];
+			$rows[] = array( 'Findings: ' . Labels::REPEAT_UNAVAILABLE['this_run'], isset( $summary['register']['unavailable'] ) ? (int) $summary['register']['unavailable'] : 0 );
+			$rows[] = array( 'Findings: ' . sprintf( Labels::REPEAT_UNAVAILABLE['issues'], (int) $repeat['min_runs'] ), (int) $repeat['issues'] );
+			$rows[] = array( 'Findings: ' . Labels::REPEAT_UNAVAILABLE['longest'], (int) $repeat['longest'] );
+			$rows[] = array( 'Findings: unavailable in a row, issue IDs', implode( ' ', array_map( 'intval', (array) $repeat['ids'] ) ) );
+		}
 		foreach ( isset( $summary['severity'] ) ? (array) $summary['severity'] : array() as $severity => $n ) {
 			$rows[] = array( 'Findings: ' . Labels::of( Labels::SEVERITIES, $severity ), (int) $n );
 		}
