@@ -1286,6 +1286,53 @@ itest(
 	}
 );
 
+itest(
+	'Review open check (fix 4): a worker killed while saving the frozen URL list does not insert URLs twice',
+	static function () use ( $admin, $hostile_url ) {
+		global $wpdb;
+		$repo  = new Repository();
+		$table = Installer::table( 'run_urls' );
+		$urls  = array( home_url( '/' ), $hostile_url, home_url( '/?p=1' ) );
+		foreach ( array( 'after the list was saved' => 'phase', 'part way through the list' => 'insert' ) as $label => $where ) {
+			finish_active_runs();
+			reset_settings();
+			$id      = Scheduler::start_recheck( $admin, $urls );
+			$inserts = 0;
+			$kill    = static function ( $query ) use ( $where, $table, $id, &$inserts ) {
+				if ( 'insert' === $where && 0 === stripos( ltrim( $query ), 'INSERT INTO `' . $table . '`' ) && 2 === ++$inserts ) {
+					throw new RuntimeException( 'worker killed' );
+				}
+				if ( 'phase' === $where && false !== strpos( $query, "`phase` = 'fetch'" ) && preg_match( "/`id` = '?{$id}'?( |\$)/", $query ) ) {
+					throw new RuntimeException( 'worker killed' );
+				}
+				return $query;
+			};
+			add_filter( 'query', $kill );
+			$killed = false;
+			try {
+				( new Worker() )->process( $id, 60 );
+			} catch ( RuntimeException $e ) {
+				$killed = true;
+			} finally {
+				remove_filter( 'query', $kill );
+			}
+			icheck( $killed, "Worker killed {$label}" );
+			// A killed PHP process loses its connection, and with it any open transaction.
+			$wpdb->query( 'ROLLBACK' );
+			icheck( 'discover' === $repo->get_run( $id )['phase'], 'Still in discovery' );
+			$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->prefix}mltsa_runs SET lock_token = '', lock_expires = 0 WHERE id = %d", $id ) );
+			( new Worker() )->process( $id, 60 );
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT seq, url_key FROM {$table} WHERE run_id = %d ORDER BY seq", $id ), ARRAY_A );
+			icheck( 3 === count( $rows ), "Killed {$label}: three URLs, once each, not " . count( $rows ) );
+			icheck( 3 === count( array_unique( array_column( $rows, 'url_key' ) ) ), 'No URL twice' );
+			icheck( array( '1', '2', '3' ) === array_map( 'strval', array_column( $rows, 'seq' ) ), 'Sequence 1 to 3' );
+			$run = $repo->get_run( $id );
+			icheck( 'complete' === $run['state'] && 3 === (int) $run['done_count'], 'Run finished with each page read once: ' . $run['state'] . ' ' . $run['done_count'] );
+		}
+		finish_active_runs();
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }

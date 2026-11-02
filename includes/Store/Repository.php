@@ -291,6 +291,27 @@ class Repository {
 	}
 
 	/**
+	 * Save a run's frozen URL list, replacing any rows an earlier attempt
+	 * left behind. Discovery saves the list in its last step and then moves
+	 * the run to the fetch phase; a worker killed in between left the rows
+	 * saved and the run still in discovery, so the next attempt added every
+	 * URL again. One transaction where the database supports it, so a kill
+	 * part way through leaves no partial list either.
+	 *
+	 * @param int   $run_id Run ID.
+	 * @param array $rows   Field arrays for insert_run_url(), without run_id.
+	 */
+	public function replace_run_urls( $run_id, array $rows ) {
+		global $wpdb;
+		$wpdb->query( 'START TRANSACTION' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups the list into one write.
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$this->t( 'run_urls' )} WHERE run_id = %d", (int) $run_id ) );
+		foreach ( $rows as $fields ) {
+			$this->insert_run_url( array( 'run_id' => (int) $run_id ) + $fields );
+		}
+		$wpdb->query( 'COMMIT' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Groups the list into one write.
+	}
+
+	/**
 	 * Update a run URL.
 	 *
 	 * @param int   $id     ID.

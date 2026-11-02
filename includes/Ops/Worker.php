@@ -294,20 +294,20 @@ class Worker {
 		}
 		$frozen = Discovery::freeze( $candidates, $policy, (int) $this->settings['max_urls'] );
 		$seq    = 0;
+		$rows   = array();
 		foreach ( $frozen['urls'] as $item ) {
-			$this->repo->insert_run_url(
-				array(
-					'run_id'           => (int) $run['id'],
-					'seq'              => ++$seq,
-					'url'              => $item['url'],
-					'url_key'          => $item['url_key'],
-					'discovery_source' => substr( $item['source'], 0, 20 ),
-					'post_id'          => $item['post_id'],
-					'coverage'         => $item['coverage'],
-					'coverage_reason'  => $item['reason'],
-				)
+			$rows[] = array(
+				'seq'              => ++$seq,
+				'url'              => $item['url'],
+				'url_key'          => $item['url_key'],
+				'discovery_source' => substr( $item['source'], 0, 20 ),
+				'post_id'          => $item['post_id'],
+				'coverage'         => $item['coverage'],
+				'coverage_reason'  => $item['reason'],
 			);
 		}
+		// Replaces rows a killed earlier attempt left, so no URL is listed twice.
+		$this->repo->replace_run_urls( (int) $run['id'], $rows );
 		$scope['excluded_by_reason'] = $frozen['excluded_by_reason'];
 		if ( empty( $scope['urls'] ) ) {
 			$scope['status_exclusions'] = Discovery::status_exclusions( $this->settings );
