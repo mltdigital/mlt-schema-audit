@@ -110,7 +110,9 @@ class WpHttpClient implements HttpClient {
 				'method'              => isset( $args['method'] ) ? $args['method'] : 'GET',
 				'timeout'             => (int) $args['timeout'],
 				'redirection'         => 0,
-				'limit_response_size' => (int) $args['max_bytes'],
+				// One byte over the cap, so a page of exactly the cap is
+				// told apart from a longer one that was cut.
+				'limit_response_size' => (int) $args['max_bytes'] + 1,
 				'user-agent'          => (string) $args['user_agent'],
 				'cookies'             => array(),
 				'headers'             => array( 'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.5' ),
@@ -149,12 +151,13 @@ class WpHttpClient implements HttpClient {
 			$headers[ strtolower( (string) $name ) ] = is_array( $value ) ? implode( ', ', $value ) : (string) $value;
 		}
 		$body = (string) wp_remote_retrieve_body( $response );
+		$cap  = (int) $args['max_bytes'];
 
 		$result['status']    = (int) wp_remote_retrieve_response_code( $response );
 		$result['headers']   = $headers;
-		$result['body']      = $body;
-		$result['truncated'] = strlen( $body ) >= (int) $args['max_bytes']
-			|| ( isset( $headers['content-length'] ) && (int) $headers['content-length'] > (int) $args['max_bytes'] );
+		$result['truncated'] = strlen( $body ) > $cap
+			|| ( isset( $headers['content-length'] ) && (int) $headers['content-length'] > $cap );
+		$result['body']      = strlen( $body ) > $cap ? substr( $body, 0, $cap ) : $body;
 		return $result;
 	}
 

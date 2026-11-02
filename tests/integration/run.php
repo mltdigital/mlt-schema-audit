@@ -1051,6 +1051,30 @@ itest(
 	}
 );
 
+itest(
+	'Review reply: a page of exactly the size cap is whole; one byte more is cut to the cap and flagged',
+	static function () {
+		$probe = ABSPATH . 'mltsa-size-probe.php';
+		file_put_contents( $probe, "<?php\n\$n = (int) \$_GET['n'];\n\$page = '<html><body>' . str_repeat( 'a', \$n - 26 ) . '</body></html>';\nheader( 'Content-Type: text/html' );\nif ( ! empty( \$_GET['gz'] ) ) {\n\t\$page = gzencode( \$page, 9 );\n\theader( 'Content-Encoding: gzip' );\n}\nheader( 'Content-Length: ' . strlen( \$page ) );\necho \$page;\n" );
+		try {
+			$client = new MLT\SchemaAudit\Engine\WpHttpClient();
+			$cap    = 5242880;
+			$args   = array( 'timeout' => 20, 'max_bytes' => $cap, 'user_agent' => 'mltsa-test' );
+			foreach ( array( 0, 1 ) as $gz ) {
+				$label = $gz ? 'gzip' : 'plain';
+				$exact = $client->request( home_url( '/mltsa-size-probe.php?gz=' . $gz . '&n=' . $cap ), '127.0.0.1', $args );
+				icheck( 200 === $exact['status'] && $exact['pinned'], $label . ': probe answered through the pinned connection: ' . $exact['error'] );
+				icheck( $cap === strlen( $exact['body'] ) && false === $exact['truncated'], $label . ': a page of exactly ' . $cap . ' bytes is whole, not truncated: ' . strlen( $exact['body'] ) );
+				icheck( '</body></html>' === substr( $exact['body'], -14 ), $label . ': its closing tags arrived' );
+				$over = $client->request( home_url( '/mltsa-size-probe.php?gz=' . $gz . '&n=' . ( $cap + 1 ) ), '127.0.0.1', $args );
+				icheck( $cap === strlen( $over['body'] ) && true === $over['truncated'], $label . ': a page of cap + 1 bytes is cut to the cap and flagged: ' . strlen( $over['body'] ) );
+			}
+		} finally {
+			unlink( $probe );
+		}
+	}
+);
+
 /**
  * What Admin::handle_cancel() does, without its redirect.
  *
