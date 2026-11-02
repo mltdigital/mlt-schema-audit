@@ -274,3 +274,35 @@ mltsa_test(
 		check( false !== strpos( $doc, "\"'\n=cmd\"" ), 'Document rows go through the same guard' );
 	}
 );
+
+mltsa_test(
+	'Review SEC-4: ZIP bytes depend on the timestamp only, not the server timezone',
+	static function () {
+		$build = static function () {
+			$bytes = '';
+			$zip   = new ZipStream(
+				static function ( $chunk ) use ( &$bytes ) {
+					$bytes .= $chunk;
+				},
+				gmmktime( 23, 59, 58, 12, 31, 2026 )
+			);
+			$zip->add( 'a.txt', 'alpha' );
+			$zip->finish();
+			return $bytes;
+		};
+		$before = date_default_timezone_get();
+		date_default_timezone_set( 'UTC' );
+		$utc = $build();
+		date_default_timezone_set( 'Pacific/Auckland' );
+		$nz = $build();
+		date_default_timezone_set( 'America/Los_Angeles' );
+		$la = $build();
+		date_default_timezone_set( $before );
+		check_same( hash( 'sha256', $utc ), hash( 'sha256', $nz ), 'Same bytes under UTC and Auckland' );
+		check_same( hash( 'sha256', $utc ), hash( 'sha256', $la ), 'Same bytes under UTC and Los Angeles' );
+		// DOS time word at offset 10, date word at offset 12 of the first local header: 23:59:58 on 31 Dec 2026 in UTC.
+		$words = unpack( 'vtime/vdate', substr( $utc, 10, 4 ) );
+		check_same( ( 23 << 11 ) | ( 59 << 5 ) | 29, $words['time'], 'DOS time is the UTC time' );
+		check_same( ( 46 << 9 ) | ( 12 << 5 ) | 31, $words['date'], 'DOS date is the UTC date' );
+	}
+);
