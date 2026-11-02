@@ -40,6 +40,12 @@ class Extractor {
 	const MAX_DEPTH = 64;
 
 	/**
+	 * Elements whose content a browser treats as text, never as markup, so a
+	 * script tag inside one is not a script element.
+	 */
+	const RAW_TEXT_ELEMENTS = array( 'textarea', 'title', 'style', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript' );
+
+	/**
 	 * Extract everything the rules need from one HTML document.
 	 *
 	 * @param string $html HTML.
@@ -75,44 +81,183 @@ class Extractor {
 	}
 
 	/**
-	 * Every script element, found by a linear scan rather than a regular
-	 * expression, so a very large page cannot hit PCRE backtracking limits
-	 * and silently lose its blocks.
+	 * Every script element a browser would see, found by a linear scan
+	 * rather than a regular expression, so a very large page cannot hit PCRE
+	 * backtracking limits and silently lose its blocks. The scan follows the
+	 * HTML tokeniser's rules where they matter here: a script inside an HTML
+	 * comment, a textarea, template, noscript, xmp, plaintext, title, style
+	 * or iframe is inert and is skipped; a quoted attribute value may hold a
+	 * ">" without ending the tag; script content is raw text up to a real
+	 * closing tag.
 	 *
 	 * @param string $html HTML.
 	 * @return array List of { attrs, content, offset }.
 	 */
 	public static function script_tags( $html ) {
+		$html   = (string) $html;
 		$tags   = array();
 		$pos    = 0;
 		$length = strlen( $html );
 		while ( $pos < $length ) {
-			$start = stripos( $html, '<script', $pos );
+			$start = strpos( $html, '<', $pos );
 			if ( false === $start ) {
 				break;
 			}
-			$after = isset( $html[ $start + 7 ] ) ? $html[ $start + 7 ] : '';
-			if ( '' !== $after && ! ctype_space( $after ) && '>' !== $after && '/' !== $after ) {
-				$pos = $start + 7;
+			$next = isset( $html[ $start + 1 ] ) ? $html[ $start + 1 ] : '';
+			if ( '!' === $next && '<!--' === substr( $html, $start, 4 ) ) {
+				$pos = self::comment_end( $html, $start );
 				continue;
 			}
-			$open_end = strpos( $html, '>', $start );
-			if ( false === $open_end ) {
-				break;
+			if ( '!' === $next || '?' === $next || ( '/' === $next && ! ctype_alpha( isset( $html[ $start + 2 ] ) ? $html[ $start + 2 ] : '' ) ) ) {
+				// Doctype, processing instruction, CDATA or a stray end tag: a bogus comment to the next ">".
+				$end = strpos( $html, '>', $start );
+				$pos = false === $end ? $length : $end + 1;
+				continue;
 			}
-			$close = stripos( $html, '</script', $open_end );
-			if ( false === $close ) {
-				break;
+			if ( '/' !== $next && ! ctype_alpha( $next ) ) {
+				$pos = $start + 1; // A literal "<" in text.
+				continue;
 			}
-			$tags[]    = array(
-				'attrs'   => substr( $html, $start + 7, $open_end - $start - 7 ),
-				'content' => substr( $html, $open_end + 1, $close - $open_end - 1 ),
-				'offset'  => $start,
-			);
-			$close_end = strpos( $html, '>', $close );
-			$pos       = false === $close_end ? $length : $close_end + 1;
+			$name_at  = $start + ( '/' === $next ? 2 : 1 );
+			$name_len = strcspn( $html, " \t\n\r\f/>", $name_at );
+			$name     = strtolower( substr( $html, $name_at, $name_len ) );
+			$tag_end  = self::tag_end( $html, $name_at + $name_len );
+			if ( false === $tag_end ) {
+				break; // End of file inside a tag: the browser drops it.
+			}
+			$pos = $tag_end + 1;
+			if ( '/' === $next ) {
+				continue;
+			}
+			if ( 'script' === $name ) {
+				$close = self::find_close( $html, 'script', $pos );
+				if ( false === $close ) {
+					break;
+				}
+				$tags[] = array(
+					'attrs'   => substr( $html, $name_at + $name_len, $tag_end - $name_at - $name_len ),
+					'content' => substr( $html, $pos, $close - $pos ),
+					'offset'  => $start,
+				);
+				$end    = strpos( $html, '>', $close );
+				$pos    = false === $end ? $length : $end + 1;
+			} elseif ( 'plaintext' === $name ) {
+				break; // Everything after it is text.
+			} elseif ( in_array( $name, self::RAW_TEXT_ELEMENTS, true ) ) {
+				$close = self::find_close( $html, $name, $pos );
+				$end   = false === $close ? false : strpos( $html, '>', $close );
+				$pos   = false === $end ? $length : $end + 1;
+			} elseif ( 'template' === $name ) {
+				$pos = self::template_end( $html, $pos );
+			}
 		}
 		return $tags;
+	}
+
+	/**
+	 * Where the tag that began before $from ends: the next ">" outside a
+	 * quoted attribute value. A quote only opens a value straight after "=".
+	 *
+	 * @param string $html HTML.
+	 * @param int    $from Offset after the tag name.
+	 * @return int|false Offset of the ">", or false at the end of the file.
+	 */
+	private static function tag_end( $html, $from ) {
+		$length = strlen( $html );
+		$quote  = '';
+		$last   = '';
+		for ( $i = $from; $i < $length; $i++ ) {
+			$char = $html[ $i ];
+			if ( '' !== $quote ) {
+				if ( $char === $quote ) {
+					$quote = '';
+					$last  = $char;
+				}
+				continue;
+			}
+			if ( ( '"' === $char || "'" === $char ) && '=' === $last ) {
+				$quote = $char;
+				continue;
+			}
+			if ( '>' === $char ) {
+				return $i;
+			}
+			if ( ! ctype_space( $char ) ) {
+				$last = $char;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Offset just after the comment that opens at $start: at "-->" or "--!>",
+	 * or at once for "<!-->" and "<!--->". An unterminated comment runs to the
+	 * end of the file, as in a browser.
+	 *
+	 * @param string $html  HTML.
+	 * @param int    $start Offset of "<!--".
+	 * @return int
+	 */
+	private static function comment_end( $html, $start ) {
+		if ( '>' === substr( $html, $start + 4, 1 ) ) {
+			return $start + 5;
+		}
+		if ( '->' === substr( $html, $start + 4, 2 ) ) {
+			return $start + 6;
+		}
+		$ends = array();
+		foreach ( array( '-->', '--!>' ) as $needle ) {
+			$at = strpos( $html, $needle, $start + 4 );
+			if ( false !== $at ) {
+				$ends[] = $at + strlen( $needle );
+			}
+		}
+		return empty( $ends ) ? strlen( $html ) : min( $ends );
+	}
+
+	/**
+	 * Offset of the closing tag of a raw-text element: "</name" followed by
+	 * whitespace, "/" or ">".
+	 *
+	 * @param string $html HTML.
+	 * @param string $name Lower-case element name.
+	 * @param int    $from Offset to search from.
+	 * @return int|false
+	 */
+	private static function find_close( $html, $name, $from ) {
+		$needle = '</' . $name;
+		$width  = strlen( $needle );
+		$at     = stripos( $html, $needle, $from );
+		while ( false !== $at ) {
+			$after = isset( $html[ $at + $width ] ) ? $html[ $at + $width ] : '';
+			if ( '' === $after || ctype_space( $after ) || '/' === $after || '>' === $after ) {
+				return $at;
+			}
+			$at = stripos( $html, $needle, $at + $width );
+		}
+		return false;
+	}
+
+	/**
+	 * Offset after a template element's closing tag, counting nested
+	 * templates. An unclosed template runs to the end of the file.
+	 *
+	 * @param string $html HTML.
+	 * @param int    $from Offset after the opening tag.
+	 * @return int
+	 */
+	private static function template_end( $html, $from ) {
+		$depth = 1;
+		$pos   = $from;
+		while ( preg_match( '#<(/?)template(?=[\s/>])#i', $html, $m, PREG_OFFSET_CAPTURE, $pos ) ) {
+			$depth += '' === $m[1][0] ? 1 : -1;
+			$end    = strpos( $html, '>', $m[0][1] );
+			$pos    = false === $end ? strlen( $html ) : $end + 1;
+			if ( 0 === $depth ) {
+				return $pos;
+			}
+		}
+		return strlen( $html );
 	}
 
 	/**
@@ -247,7 +392,7 @@ class Extractor {
 	}
 
 	/**
-	 * Strip an HTML comment or CDATA wrapper around script content.
+	 * Strip an HTML comment or CDATA wrapper (plain or commented out) around script content.
 	 *
 	 * @param string $raw Raw content.
 	 * @return string
@@ -257,7 +402,9 @@ class Extractor {
 		if ( preg_match( '/^<!--(.*?)-->$/s', $json, $m ) ) {
 			$json = trim( $m[1] );
 		}
-		if ( preg_match( '/^(?:\/\/\s*)?<!\[CDATA\[(.*?)(?:\/\/\s*)?\]\]>$/s', $json, $m ) ) {
+		// The wrapper may be commented out with // or with a block comment:
+		// "//<![CDATA[ ... //]]>" or "/* <![CDATA[ */ ... /* ]]> */".
+		if ( preg_match( '/^(?:\/\/\s*|\/\*\s*)?<!\[CDATA\[\s*(?:\*\/)?(.*?)(?:\/\/\s*|\/\*\s*)?\]\]>\s*(?:\*\/)?$/s', $json, $m ) ) {
 			$json = trim( $m[1] );
 		}
 		return $json;

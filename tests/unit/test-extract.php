@@ -162,3 +162,67 @@ mltsa_test(
 		check( $a !== $c, 'array order significant' );
 	}
 );
+
+mltsa_test(
+	'Review 8: JSON-LD in comments and other inert contexts is not markup; real scripts around them still are',
+	static function () {
+		$ld   = '<script type="application/ld+json">{"@context":"https://schema.org","@type":"%s","name":"X"}</script>';
+		$live = sprintf( $ld, 'LegalService' );
+		$only = static function ( $html ) {
+			return ( new Extractor() )->extract( $html )['blocks'];
+		};
+
+		check_same( 0, count( $only( '<body><!-- ' . sprintf( $ld, 'Organization' ) . ' --></body>' ) ), 'HTML comment' );
+		check_same( 0, count( $only( '<body><!--' . sprintf( $ld, 'Organization' ) ) ), 'Unterminated comment runs to the end' );
+		check_same( 0, count( $only( '<textarea>' . sprintf( $ld, 'Organization' ) . '</textarea>' ) ), 'textarea example' );
+		check_same( 0, count( $only( '<TEXTAREA rows=3>' . sprintf( $ld, 'Organization' ) . '</TEXTAREA >' ) ), 'textarea, odd case' );
+		check_same( 0, count( $only( '<template><div>' . sprintf( $ld, 'Organization' ) . '</div></template>' ) ), 'template' );
+		check_same( 0, count( $only( '<template><template></template>' . sprintf( $ld, 'Organization' ) . '</template>' ) ), 'nested template' );
+		check_same( 0, count( $only( '<noscript>' . sprintf( $ld, 'Organization' ) . '</noscript>' ) ), 'noscript' );
+		check_same( 0, count( $only( '<xmp>' . sprintf( $ld, 'Organization' ) . '</xmp>' ) ), 'xmp' );
+		check_same( 0, count( $only( '<body><plaintext>' . sprintf( $ld, 'Organization' ) ) ), 'plaintext' );
+		check_same( 0, count( $only( '<title>' . sprintf( $ld, 'Organization' ) . '</title>' ) ), 'title' );
+		check_same( 0, count( $only( '<div data-x="' . htmlspecialchars( sprintf( $ld, 'Organization' ) ) . '"></div><p title=\'<script type="application/ld+json">{}</script>\'>x</p>' ) ), 'Script text inside an attribute value' );
+
+		// A comment or inert element does not hide the real block next to it.
+		$blocks = $only( '<!-- ' . sprintf( $ld, 'Organization' ) . ' -->' . $live . '<textarea>' . sprintf( $ld, 'Person' ) . '</textarea>' . '<template></template>' );
+		check_same( 1, count( $blocks ), 'Only the live block' );
+		check_same( 'LegalService', $blocks[0]['data']['@type'], 'The live block is the one kept' );
+
+		// A comment closed with --!> or an empty comment ends where a browser ends it.
+		check_same( 1, count( $only( '<!--x--!>' . $live ) ), 'Comment closed by --!>' );
+		check_same( 1, count( $only( '<!-->' . $live ) ), 'Empty comment <!-->' );
+
+		// A ">" inside a quoted attribute does not end the script tag early.
+		$blocks = $only( '<script data-note="a > b" type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService"}</script>' );
+		check_same( 1, count( $blocks ), 'Quoted ">" in a script attribute' );
+		check_same( 'ok', $blocks[0]['parse'], 'and the content is the JSON, not the rest of the tag' );
+
+		// Raw text rules inside a real script are unchanged: "<" and comment markers in the JSON are content.
+		$blocks = $only( '<script type="application/ld+json">{"@context":"https://schema.org","@type":"LegalService","description":"a <!-- b <textarea> c"}</script>' );
+		check_same( 'ok', $blocks[0]['parse'], 'Markup-like text inside the JSON string' );
+
+		// And the commented block no longer produces findings or corroboration.
+		$result = audit_html( '<html><head><!-- ' . sprintf( $ld, 'LegalService' ) . ' --></head><body><p>Hello</p></body></html>' );
+		check( ! in_array( 'SYN-001', rule_ids( $result['findings'] ), true ), 'No syntax finding from disabled markup' );
+	}
+);
+
+mltsa_test(
+	'Review ENG-1: a CDATA wrapper commented out with a block comment is removed',
+	static function () {
+		$json    = '{"@context":"https://schema.org","@type":"LegalService","name":"X"}';
+		$wrapped = array(
+			'block comments'       => "/* <![CDATA[ */\n{$json}\n/* ]]> */",
+			'block, no spaces'     => "/*<![CDATA[*/{$json}/*]]>*/",
+			'line comments'        => "//<![CDATA[\n{$json}\n//]]>",
+			'plain CDATA'          => "<![CDATA[{$json}]]>",
+			'inside HTML comment'  => "<!--\n/* <![CDATA[ */\n{$json}\n/* ]]> */\n-->",
+		);
+		foreach ( $wrapped as $label => $content ) {
+			$blocks = ( new Extractor() )->extract( '<script type="application/ld+json">' . $content . '</script>' )['blocks'];
+			check_same( 'ok', $blocks[0]['parse'], $label . ' parses' );
+			check_same( 'LegalService', $blocks[0]['data']['@type'], $label . ' keeps the data' );
+		}
+	}
+);
