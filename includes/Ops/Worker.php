@@ -710,10 +710,15 @@ class Worker {
 					++$this->requests;
 				}
 				if ( in_array( (int) $result['status'], array( 405, 501 ), true ) ) {
-					$result = $fetcher->fetch( $url, 'GET', $is_file, $deadline );
+					$head_attempts = (int) $result['attempts'];
+					$result        = $fetcher->fetch( $url, 'GET', $is_file, $deadline );
 					if ( $result['attempts'] > 0 ) {
 						++$this->requests;
 					}
+					// The HEAD was a request: HEAD and GET are one accounted
+					// attempt, so a GET deferred after a slow refusal counts
+					// and the check cannot repeat for ever (branch review S2).
+					$result['attempts'] = (int) $result['attempts'] + $head_attempts;
 					// The check asks only whether the file or page exists: a
 					// 2xx answer to the GET proves it, even with its body over
 					// the size cap (branch review R3).

@@ -35,6 +35,11 @@ if ( false === strpos( home_url(), 'localhost' ) && false === strpos( home_url()
 
 $GLOBALS['it'] = array( 'pass' => 0, 'fail' => array(), 'asserts' => 0 );
 function itest( $name, $fn ) {
+	// MLTSA_ITEST=<text> runs only the tests whose name contains it.
+	$only = (string) getenv( 'MLTSA_ITEST' );
+	if ( '' !== $only && false === stripos( $name, $only ) ) {
+		return;
+	}
 	try {
 		$fn();
 		++$GLOBALS['it']['pass'];
@@ -826,6 +831,42 @@ itest(
 		icheck( 1 === $client->count && array( 15 ) === $client->timeouts, 'One request with the full timeout: ' . wp_json_encode( $client->timeouts ) );
 		icheck( 1 === (int) $summary['resource_index'] && 'resources' !== $run['phase'], 'Moved past the file' );
 		icheck( ! isset( $summary['resource_attempts'] ), 'Attempt counter cleared' );
+		finish_active_runs();
+	}
+);
+
+itest(
+	'Branch review S2: a slow HEAD refusal (405) followed by a GET that does not fit the slice never stalls the run',
+	static function () use ( $admin ) {
+		finish_active_runs();
+		// Timeout 3, so a slice is 5 seconds: after a 2.5 second HEAD the GET
+		// fallback has no full timeout left.
+		reset_settings( array( 'timeout' => 3 ) );
+		$repo = new Repository();
+		$id   = Scheduler::start_recheck( $admin, array( home_url( '/' ) ) );
+		$file = home_url( '/wp-content/uploads/s2-brochure.pdf' );
+		$repo->update_run( $id, array( 'state' => 'running', 'phase' => 'resources', 'summary' => (string) wp_json_encode( array( 'resources' => array( $file => array() ) ) ) ) );
+		$client = new class() implements MLT\SchemaAudit\Engine\HttpClient {
+			public $log = array();
+			public function request( $url, $pinned_ip, array $args ) {
+				$this->log[] = $args['method'];
+				if ( 'HEAD' === $args['method'] ) {
+					usleep( 2500000 );
+					return array( 'status' => 405, 'error_code' => '', 'error' => '', 'headers' => array(), 'body' => '', 'truncated' => false, 'pinned' => true );
+				}
+				return array( 'status' => 200, 'error_code' => '', 'error' => '', 'headers' => array( 'content-type' => 'application/pdf' ), 'body' => 'x', 'truncated' => false, 'pinned' => true );
+			}
+		};
+		for ( $slice = 1; $slice <= 4; $slice++ ) {
+			( new Worker( $client, static function () {} ) )->process( $id, 1 );
+			$run = $repo->get_run( $id );
+			if ( 'resources' !== $run['phase'] ) {
+				break;
+			}
+		}
+		$summary = Repository::decode( $run['summary'] );
+		icheck( 'resources' !== $run['phase'] && 1 === (int) $summary['resource_index'], 'Moved past the file: ' . $run['phase'] . ' ' . wp_json_encode( $summary ) );
+		icheck( $slice <= 3, 'Within three slices: ' . $slice . ' ' . implode( ',', $client->log ) );
 		finish_active_runs();
 	}
 );
