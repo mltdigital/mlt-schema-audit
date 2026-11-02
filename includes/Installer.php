@@ -330,6 +330,28 @@ class Installer {
 	}
 
 	/**
+	 * Whether the database upgrade for this version has not completed (the
+	 * recorded version is set only once the new columns are there). While
+	 * it is pending, audits neither start nor run: the code would write
+	 * columns the tables do not have (branch review R5).
+	 *
+	 * @return bool
+	 */
+	public static function upgrade_pending() {
+		return (string) get_option( 'mltsa_db_version' ) !== MLTSA_DB_VERSION;
+	}
+
+	/**
+	 * Why audits are stopped while the upgrade is pending, for the Health
+	 * screen, the audit screens and WP-CLI.
+	 *
+	 * @return string
+	 */
+	public static function upgrade_message() {
+		return sprintf( 'The database schema is at version %s, not %s: the upgrade did not complete and is retried hourly. Audits do not start or run until it completes. Check that the database user may alter tables.', (string) get_option( 'mltsa_db_version' ), MLTSA_DB_VERSION );
+	}
+
+	/**
 	 * Whether every table exists with every column a database upgrade added.
 	 *
 	 * @return bool

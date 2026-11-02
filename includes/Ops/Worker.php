@@ -200,6 +200,11 @@ class Worker {
 	 * @return array { state, phase, done, total, run_id }
 	 */
 	public function process( $run_id, $budget ) {
+		if ( \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			// The tables are older than this code: do no work until the
+			// upgrade completes (branch review R5).
+			return $this->status( $run_id, 'schema_outdated' );
+		}
 		$budget      = self::slice_budget( $budget, $this->timeout );
 		$deadline    = microtime( true ) + $budget;
 		$token       = wp_generate_password( 20, false );

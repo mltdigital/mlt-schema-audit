@@ -29,6 +29,9 @@ class Cli {
 	 */
 	public function tick( $args, $assoc_args ) {
 		$budget = isset( $assoc_args['budget'] ) ? max( 5, min( 3600, (int) $assoc_args['budget'] ) ) : 240;
+		if ( Installer::upgrade_pending() ) {
+			\WP_CLI::warning( Installer::upgrade_message() );
+		}
 		$status = Ops\Worker::tick( $budget );
 		\WP_CLI::log( (string) wp_json_encode( $status ) );
 	}
@@ -45,6 +48,9 @@ class Cli {
 	 * @param array $assoc_args Named.
 	 */
 	public function audit( $args, $assoc_args ) {
+		if ( Installer::upgrade_pending() ) {
+			\WP_CLI::error( 'Refused: ' . Installer::upgrade_message() );
+		}
 		$id = Ops\Scheduler::start_manual( 0 );
 		if ( ! $id ) {
 			\WP_CLI::error( 'Refused: another audit is in progress, or MLTSA_DISABLE is set.' );
@@ -57,7 +63,7 @@ class Cli {
 		do {
 			$status = $worker->process( $id, 60 );
 			\WP_CLI::log( sprintf( '%s %s %d/%d', $status['state'], $status['phase'], $status['done'], $status['total'] ) );
-		} while ( in_array( $status['state'], array( 'queued', 'running' ), true ) && 'locked' !== $status['note'] );
+		} while ( in_array( $status['state'], array( 'queued', 'running' ), true ) && ! in_array( $status['note'], array( 'locked', 'schema_outdated' ), true ) );
 	}
 
 	/**

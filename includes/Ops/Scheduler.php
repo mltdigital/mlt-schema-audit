@@ -243,7 +243,7 @@ class Scheduler {
 	 * @return int
 	 */
 	private static function start( array $fields, $user_id ) {
-		if ( Settings::constant_disabled() ) {
+		if ( Settings::constant_disabled() || \MLT\SchemaAudit\Installer::upgrade_pending() ) {
 			return 0;
 		}
 		if ( ! add_option( self::START_LOCK, time(), '', 'no' ) ) {

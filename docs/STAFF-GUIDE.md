@@ -100,6 +100,8 @@ Recipients are confirmed against the site's address. If the address changes, all
 
 Shows, in plain English: kill switch, monitoring and the next start, recipients and any mail pause, the outbox, the scheduler's last run, the audit in progress, connection pinning, and versions. Check it after setup and whenever an email does not arrive.
 
+If a plugin update could not finish its database upgrade (for example, the database user may not alter tables), the Health screen shows a fail line and every Schema Audit screen shows the same message. Until the upgrade completes (it is retried hourly), no audit starts or runs, from the screens, the schedule or WP-CLI.
+
 ## Removing the plugin
 
 Deactivating clears every scheduled event and keeps the data. Deleting the plugin removes its settings and capabilities; it removes the audit tables and history only if **Remove all audit data when the plugin is deleted** was ticked beforehand. It never touches the MLT Schema Automation plugin or its data.

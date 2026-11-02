@@ -1776,6 +1776,64 @@ itest(
 	}
 );
 
+itest(
+	'Branch review R5: while the database upgrade has not completed, audits neither start nor run, and the screens and WP-CLI say why',
+	static function () use ( $admin ) {
+		global $wpdb;
+		finish_active_runs();
+		reset_settings();
+		$repo    = new Repository();
+		$version = get_option( 'mltsa_db_version' );
+		$runs    = $repo->count_runs();
+		// The server process would retry the upgrade on boot; hold it off.
+		set_transient( 'mltsa_upgrade_retry', 1, 600 );
+		update_option( 'mltsa_db_version', '1', false );
+		try {
+			icheck( MLT\SchemaAudit\Installer::upgrade_pending(), 'Upgrade pending' );
+			icheck( 0 === Scheduler::start_manual( $admin ), 'Manual start refused' );
+			icheck( 0 === Scheduler::start_recheck( $admin, array( home_url( '/' ) ) ), 'Recheck refused' );
+			icheck( $repo->count_runs() === $runs, 'No run created' );
+
+			$health = '';
+			foreach ( MLT\SchemaAudit\Admin\Health::checks() as $check ) {
+				if ( 'Database upgrade' === $check['label'] ) {
+					$health = $check['status'] . ': ' . $check['detail'];
+				}
+			}
+			icheck( 0 === strpos( $health, 'fail: ' ) && false !== strpos( $health, 'Audits do not start or run' ), 'Health: ' . $health );
+
+			list( $cookie, $nonce ) = session_for( $admin );
+			$r = http( 'GET', '/wp-admin/admin.php?page=mltsa', $cookie );
+			icheck( 200 === $r['status'] && false !== strpos( $r['body'], 'the upgrade did not complete' ) && false === strpos( $r['body'], 'value="mltsa_start"' ), 'Audit screen gives the reason and no Start button: ' . $r['status'] );
+			$r = http( 'POST', '/wp-admin/admin-post.php', $cookie, array( 'action' => 'mltsa_start', '_wpnonce' => $nonce['mltsa_start'] ) );
+			icheck( 302 === $r['status'] && false !== strpos( $r['headers'], 'schema_outdated' ), 'Start through admin-post refused with the reason: ' . $r['status'] );
+			icheck( $repo->count_runs() === $runs, 'Still no run created' );
+
+			$wp   = escapeshellarg( ABSPATH );
+			$cmd  = 'php -d error_reporting=24575 ' . escapeshellarg( trim( (string) shell_exec( 'command -v wp' ) ) ) . ' --path=' . $wp;
+			$out  = (string) shell_exec( $cmd . ' mltsa audit 2>&1' );
+			icheck( false !== strpos( $out, 'Refused' ) && false !== strpos( $out, 'the upgrade did not complete' ), 'wp mltsa audit refused with the reason: ' . trim( $out ) );
+
+			// A run already in progress when the upgrade failed is not worked on.
+			$id     = $repo->create_run( array( 'run_type' => 'manual', 'trigger_type' => 'user', 'state' => 'running', 'phase' => 'fetch', 'scope' => (string) wp_json_encode( array( 'urls' => array( home_url( '/' ) ) ) ) ) );
+			$client = timing_out_client();
+			$status = ( new Worker( $client, static function () {} ) )->process( $id, 5 );
+			icheck( 'schema_outdated' === $status['note'] && 0 === $client->count, 'Worker does nothing: ' . wp_json_encode( $status ) );
+			icheck( 'fetch' === $repo->get_run( $id )['phase'], 'Run left where it was' );
+			$r = http( 'POST', '/wp-admin/admin-ajax.php', $cookie, array( 'action' => 'mltsa_step', 'nonce' => $nonce['mltsa_step'] ) );
+			icheck( false !== strpos( $r['body'], '"state":"schema_outdated"' ) && false !== strpos( $r['body'], 'the upgrade did not complete' ), 'Audit screen step stops with the reason: ' . substr( $r['body'], 0, 200 ) );
+			$tick = (string) shell_exec( $cmd . ' mltsa tick --budget=5 2>&1' );
+			icheck( false !== strpos( $tick, 'Warning' ) && false !== strpos( $tick, 'schema_outdated' ), 'wp mltsa tick warns and does no work: ' . trim( $tick ) );
+			icheck( 'fetch' === $repo->get_run( $id )['phase'], 'Still left where it was' );
+		} finally {
+			update_option( 'mltsa_db_version', $version, false );
+			delete_transient( 'mltsa_upgrade_retry' );
+			finish_active_runs();
+		}
+		icheck( ! MLT\SchemaAudit\Installer::upgrade_pending(), 'Version restored' );
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }

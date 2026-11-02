@@ -29,6 +29,9 @@
 					text.textContent = done + ' of ' + ( parseInt( s.total, 10 ) || 0 ) + ' pages, phase: ' + String( s.phase || '' );
 					bar.style.width = Math.min( 100, Math.floor( ( 100 * done ) / total ) ) + '%';
 					window.setTimeout( step, 'locked' === s.note ? 5000 : 500 );
+				} else if ( 'schema_outdated' === s.state ) {
+					// The database upgrade has not completed: stop, say why.
+					text.textContent = String( s.message || 'Waiting for the database upgrade.' );
 				} else {
 					text.textContent = 'Finished. Reloading.';
 					window.location.reload();

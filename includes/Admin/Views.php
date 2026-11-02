@@ -90,6 +90,9 @@ class Views {
 		if ( Settings::constant_disabled() ) {
 			echo '<div class="notice notice-warning"><p>' . esc_html__( 'MLTSA_DISABLE is set: scheduling, mail and manual audits are stopped.', 'mlt-schema-audit' ) . '</p></div>';
 		}
+		if ( \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			echo '<div class="notice notice-error"><p>' . esc_html( \MLT\SchemaAudit\Installer::upgrade_message() ) . '</p></div>';
+		}
 		echo '<p class="mltsa-coverage">' . esc_html( Labels::COVERAGE_STATEMENT ) . '</p>';
 	}
 
@@ -145,6 +148,8 @@ class Views {
 		$active = $repo->active_run();
 		if ( $active ) {
 			self::progress( $active );
+		} elseif ( \MLT\SchemaAudit\Installer::upgrade_pending() ) {
+			echo '<p>' . esc_html__( 'Audits cannot start until the database upgrade completes (see the message above and the Health screen).', 'mlt-schema-audit' ) . '</p>';
 		} else {
 			echo '<p>' . esc_html__( 'Run a manual audit of this site now. It reads each page in scope one at a time and never changes the site.', 'mlt-schema-audit' ) . '</p>';
 			self::button_form( 'mltsa_start', __( 'Start audit', 'mlt-schema-audit' ) );
