@@ -402,7 +402,9 @@ class Settings {
 		$out = array();
 		foreach ( self::lines( $value, true ) as $line ) {
 			$email = sanitize_email( $line );
-			if ( '' === $email || ! is_email( $email ) ) {
+			// 254 characters is the longest address mail allows and the
+			// outbox column's size, so nothing is cut when it is stored.
+			if ( '' === $email || ! is_email( $email ) || strlen( $email ) > 254 ) {
 				/* translators: %s: the rejected text, escaped on output. */
 				$errors[] = sprintf( __( 'Not a valid email address: %s', 'mlt-schema-audit' ), $line );
 				return null;

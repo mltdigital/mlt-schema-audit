@@ -1075,6 +1075,35 @@ itest(
 	}
 );
 
+itest(
+	'MySQL: a recipient longer than the 254-character outbox column is refused, not cut; one row per recipient still holds',
+	static function () {
+		$domain = '@' . str_repeat( 'b', 60 ) . '.' . str_repeat( 'c', 60 ) . '.' . str_repeat( 'd', 60 ) . '.example';
+		$ok     = str_repeat( 'a', 254 - strlen( $domain ) ) . $domain;
+		$long   = 'a' . $ok;
+		$errors = array();
+		icheck( array( $ok ) === Settings::sanitise( 'recipients', $ok, $errors ) && array() === $errors, 'A 254-character address is accepted' );
+		$errors = array();
+		icheck( null === Settings::sanitise( 'recipients', $long, $errors ) && 1 === count( $errors ), 'A 255-character address is refused: ' . wp_json_encode( $errors ) );
+		$repo  = new Repository();
+		$row   = array(
+			'run_id'            => 999999,
+			'notification_type' => 'digest',
+			'recipient'         => $ok,
+		);
+		$first = $repo->insert_outbox( $row );
+		icheck( $first > 0 && 0 === $repo->insert_outbox( $row ), 'Second row for the same recipient refused' );
+		global $wpdb;
+		$stored = $wpdb->get_var( $wpdb->prepare( 'SELECT recipient FROM ' . Installer::table( 'outbox' ) . ' WHERE id = %d', $first ) );
+		icheck( $ok === $stored, 'Stored whole' );
+		$suppress = $wpdb->suppress_errors( true );
+		$dup      = $wpdb->insert( Installer::table( 'outbox' ), $row + array( 'created_utc' => Repository::now() ) );
+		$wpdb->suppress_errors( $suppress );
+		icheck( false === $dup, 'The unique key (recipient indexed to 191 characters on MySQL) refuses a direct duplicate' );
+		$wpdb->query( $wpdb->prepare( 'DELETE FROM ' . Installer::table( 'outbox' ) . ' WHERE run_id = %d', 999999 ) );
+	}
+);
+
 /**
  * What Admin::handle_cancel() does, without its redirect.
  *

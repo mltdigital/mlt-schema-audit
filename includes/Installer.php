@@ -316,7 +316,7 @@ class Installer {
   updated_utc datetime DEFAULT NULL,
   submitted_utc datetime DEFAULT NULL,
   PRIMARY KEY  (id),
-  UNIQUE KEY one_per_recipient (run_id, notification_type, recipient),
+  UNIQUE KEY one_per_recipient (run_id, notification_type, recipient(191)),
   KEY state (state)
 ) $c;";
 

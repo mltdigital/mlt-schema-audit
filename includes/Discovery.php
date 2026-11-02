@@ -35,6 +35,12 @@ class Discovery {
 	const MAX_SITEMAP_URLS = 2000;
 
 	/**
+	 * Longest URL listed (the run_urls.url column, varchar(2048)). The
+	 * sitemap protocol limits URLs to fewer than 2,048 characters.
+	 */
+	const MAX_URL_LENGTH = 2048;
+
+	/**
 	 * Gather candidates from WordPress.
 	 *
 	 * @param array $settings Settings.
@@ -258,6 +264,11 @@ class Discovery {
 			}
 			$keys[ $key ] = true;
 			$reason       = (string) $c['exclude'];
+			// The URL column holds 2,048 characters. MySQL would cut a longer
+			// URL to fit, and the audit would then request a different page.
+			if ( '' === $reason && strlen( $url ) > self::MAX_URL_LENGTH ) {
+				$reason = 'url_too_long';
+			}
 			if ( '' === $reason ) {
 				$check  = $policy->check_url( $url );
 				$reason = $check['ok'] ? '' : $check['reason'];
@@ -271,7 +282,7 @@ class Discovery {
 				$counts[ $reason ] = isset( $counts[ $reason ] ) ? $counts[ $reason ] + 1 : 1;
 			}
 			$list[] = array(
-				'url'      => $url,
+				'url'      => substr( $url, 0, self::MAX_URL_LENGTH ),
 				'url_key'  => sha1( $key ),
 				'source'   => (string) $c['source'],
 				'post_id'  => (int) $c['post_id'],
