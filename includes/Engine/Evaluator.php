@@ -364,7 +364,7 @@ class Evaluator {
 						continue;
 					}
 					if ( ! empty( $approved ) && ! in_array( $nsn, $approved, true ) ) {
-						$this->add( 'FACT-006', 'review', 'high', $base + array( 'comparison' => 'Approved: ' . implode( ', ', (array) $this->ctx['approved_phones'] ) ) );
+						$this->add( 'FACT-006', 'review', 'high', $base + array( 'comparison' => 'Approved: ' . implode( ', ', array_map( array( __CLASS__, 'display_nsn' ), $approved ) ) ) );
 					}
 					if ( ! $this->facts->has_phone( $phone ) && ! in_array( $nsn, $approved, true ) ) {
 						$this->add(
