@@ -1333,6 +1333,47 @@ itest(
 	}
 );
 
+itest(
+	'Review open check (fix 6): a recheck started from the register through admin-post fetches the stored ?page_id= URL, not the home page',
+	static function () use ( $admin, $hostile_post ) {
+		global $wpdb;
+		$repo      = new Repository();
+		global $wp_rewrite;
+		$permalink = get_option( 'permalink_structure' );
+		$wp_rewrite->set_permalink_structure( '' );
+		try {
+			finish_active_runs();
+			reset_settings();
+			$plain = get_permalink( $hostile_post );
+			icheck( false !== strpos( $plain, '?page_id=' . $hostile_post ), 'Plain permalink: ' . $plain );
+			// Seed the register with issues stored against the plain permalink.
+			$seed = Scheduler::start_recheck( $admin, array( $plain ) );
+			( new Worker() )->process( $seed, 60 );
+			$issue_ids = array_map( 'intval', $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$wpdb->prefix}mltsa_issues WHERE page_url = %s", $plain ) ) );
+			icheck( count( $issue_ids ) > 0, 'Issues stored with the query string in page_url' );
+
+			// The staff path: tick an issue, Recheck.
+			list( $cookie, $nonce ) = session_for( $admin );
+			$before = (int) $wpdb->get_var( "SELECT MAX(id) FROM {$wpdb->prefix}mltsa_runs" );
+			$r      = http( 'POST', '/wp-admin/admin-post.php', $cookie, array( 'action' => 'mltsa_recheck', '_wpnonce' => $nonce['mltsa_recheck'], 'issue_ids' => array( $issue_ids[0] ) ) );
+			icheck( 302 === $r['status'] && false !== strpos( $r['headers'], 'recheck_started' ), 'Recheck started through admin-post: ' . $r['status'] );
+			$run_id = (int) $wpdb->get_var( "SELECT MAX(id) FROM {$wpdb->prefix}mltsa_runs" );
+			icheck( $run_id > $before && 'recheck' === $repo->get_run( $run_id )['run_type'], 'A new recheck run' );
+			( new Worker() )->process( $run_id, 60 );
+			$row = $wpdb->get_row( $wpdb->prepare( 'SELECT url, final_url, http_status, coverage FROM ' . Installer::table( 'run_urls' ) . ' WHERE run_id = %d', $run_id ), ARRAY_A );
+			icheck( $plain === $row['url'], 'Frozen URL keeps the query: ' . $row['url'] );
+			icheck( 200 === (int) $row['http_status'] && 'ok' === $row['coverage'], 'Read: ' . wp_json_encode( $row ) );
+			$observed = $wpdb->get_col( $wpdb->prepare( "SELECT observed FROM {$wpdb->prefix}mltsa_occurrences WHERE run_id = %d", $run_id ) );
+			icheck( in_array( "+44 1632 960999' OR '1'='1", $observed, true ), 'The page served is the fixture page (its markup), not the home page' );
+			icheck( 'complete' === $repo->get_run( $run_id )['state'], 'Recheck complete' );
+			echo '      evidence: run ' . $run_id . ' fetched ' . $row['url'] . ' -> HTTP ' . $row['http_status'] . ', ' . count( $observed ) . " findings from the fixture page\n";
+		} finally {
+			$wp_rewrite->set_permalink_structure( $permalink );
+			finish_active_runs();
+		}
+	}
+);
+
 if ( is_array( $saved ) ) {
 	update_option( Settings::OPTION, $saved, false );
 }
